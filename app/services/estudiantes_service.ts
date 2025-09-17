@@ -1,13 +1,14 @@
 import bcrypt from 'bcrypt'
 import Usuario from '../models/usuario.js'
 import Sesion from '../models/sesione.js'
+import { dir } from 'console'
 
 export default class EstudiantesService {
   private claveInicial(numero_documento: string, apellido: string) {
     return `${numero_documento}${(apellido || '').toLowerCase().slice(-3)}`
   }
 
-  // ⬇️ ahora recibe y guarda 'nombre'
+  // ⬇ ahora recibe y guarda 'nombre'
   async crearUno(d: {
     id_institucion: number
     tipo_documento: string
@@ -15,6 +16,8 @@ export default class EstudiantesService {
     nombre: string
     apellido: string
     correo?: string | null
+    direccion :string | null
+    telefono :string | null
     grado?: string | null
     curso?: string | null
     jornada?: string | null
@@ -36,6 +39,8 @@ export default class EstudiantesService {
         nombre: d.nombre,        // <-- importante
         apellido: d.apellido,
         correo: d.correo ?? null,
+        direccion: d.direccion ?? null,
+        telefono: d.telefono ?? null,
         grado: d.grado ?? null,
         curso: d.curso ?? null,
         jornada: d.jornada ?? null,
@@ -56,6 +61,8 @@ export default class EstudiantesService {
       nombre: d.nombre,
       apellido: d.apellido,
       correo: d.correo ?? null,
+      direccion: d.direccion ?? null,
+      telefono: d.telefono ?? null,
       grado: d.grado ?? null,
       curso: d.curso ?? null,
       jornada: d.jornada ?? null,
@@ -93,6 +100,8 @@ export default class EstudiantesService {
         nombre,
         apellido,
         correo: f.correo ? String(f.correo).toLowerCase() : null,
+        direccion: f.direccion ?? null,
+        telefono: f.telefono ?? null,
         grado: f.grado ?? null,
         curso: f.curso ?? null,
         jornada: f.jornada ?? null,
@@ -124,6 +133,8 @@ export default class EstudiantesService {
 
   async editar(id_usuario: number, cambios: Partial<{
     correo: string | null
+    direccion: string | null
+    telefono: string | null
     grado: string | null
     curso: string | null
     jornada: string | null
@@ -133,6 +144,8 @@ export default class EstudiantesService {
   }>) {
     const u = await Usuario.findOrFail(id_usuario)
     if (cambios.correo !== undefined) (u as any).correo = cambios.correo
+    if (cambios.direccion !== undefined) (u as any).direccion = cambios.direccion
+    if (cambios.telefono !== undefined) (u as any).telefono = cambios.telefono
     if (cambios.grado !== undefined) (u as any).grado = cambios.grado
     if (cambios.curso !== undefined) (u as any).curso = cambios.curso
     if (cambios.jornada !== undefined) (u as any).jornada = cambios.jornada
