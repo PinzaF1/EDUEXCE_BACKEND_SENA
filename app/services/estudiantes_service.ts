@@ -1,7 +1,6 @@
 import bcrypt from 'bcrypt'
 import Usuario from '../models/usuario.js'
 import Sesion from '../models/sesione.js'
-import { dir } from 'console'
 
 export default class EstudiantesService {
   private claveInicial(numero_documento: string, apellido: string) {
