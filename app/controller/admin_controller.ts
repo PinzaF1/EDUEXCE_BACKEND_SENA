@@ -55,6 +55,8 @@ class AdminController {
         nombre: String(b.nombre ?? b.nombres ?? '').trim(),       // <-- nombre
         apellido: String(b.apellido ?? b.apellidos ?? '').trim(), // <-- apellido
         correo: b.correo ? String(b.correo).toLowerCase() : null,
+        direccion: b.direccion ?? null,
+        telefono: b.telefono ?? null,
         grado: b.grado ?? null,
         curso: b.curso ?? null,
         jornada: b.jornada ?? null,
