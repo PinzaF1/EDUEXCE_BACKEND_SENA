@@ -12,6 +12,16 @@ type RespCierre = { id_pregunta: number; respuesta: string }
 export default class SesionesService {
   ia = new IaService()
 
+  /** Forzar tabla calificada sin tocar el archivo del modelo */
+  private ensureDetalleTable() {
+    const expected = 'public.sesiones_detalles'
+    // @ts-ignore - override del static en runtime
+    if ((SesionDetalle as any).table !== expected) {
+      // @ts-ignore
+      (SesionDetalle as any).table = expected
+    }
+  }
+
   // ========= PARADA =========
   async crearParada(d: {
     id_usuario: number
@@ -19,8 +29,10 @@ export default class SesionesService {
     subtema: string
     nivel_orden: number
     usa_estilo_kolb: boolean
-    intento_actual?: number // no se persiste (tu modelo no tiene 'intento')
+    intento_actual?: number
   }) {
+    this.ensureDetalleTable()
+
     const prev = await Sesion.query()
       .where('id_usuario', d.id_usuario)
       .where('area', d.area)
@@ -30,8 +42,8 @@ export default class SesionesService {
 
     const excludeIds: number[] = []
     if (prev) {
-      const detPrev = await SesionDetalle.query().where('id_sesion', prev.id_sesion)
-      excludeIds.push(...detPrev.map((x) => Number(x.id_pregunta)).filter(Boolean))
+      const detPrev = await SesionDetalle.query().where('id_sesion', (prev as any).id_sesion)
+      excludeIds.push(...detPrev.map((x) => Number((x as any).id_pregunta)).filter(Boolean))
     }
 
     let estilo_kolb: any = undefined
@@ -65,7 +77,6 @@ export default class SesionesService {
       correctas: 0,
     } as any)
 
-    // Detalles (createMany)
     const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
     const rows = preguntas.map((p: any, i: number) => ({
       id_sesion,
@@ -83,6 +94,8 @@ export default class SesionesService {
     id_sesion: number
     respuestas: Array<{ orden: number; opcion: string; tiempo_empleado_seg?: number }>
   }) {
+    this.ensureDetalleTable()
+
     const ses = await Sesion.findOrFail(d.id_sesion)
     const detalles = await SesionDetalle.query()
       .where('id_sesion', (ses as any).id_sesion)
@@ -144,7 +157,7 @@ export default class SesionesService {
       .where('id_usuario', id_usuario)
       .where('area', area)
       .where('subtema', subtema)
-      .orderBy('inicio_at', 'desc')
+      .orderBy('inicio_at', 'asc')
       .limit(3)
 
     const perdidas = ultimas.filter((s) => (Number((s as any).correctas) || 0) < 4)
@@ -157,8 +170,9 @@ export default class SesionesService {
 
   // ========= SIMULACRO POR ÁREA =========
   async crearSimulacroArea(d: { id_usuario: number; area: Area; subtemas: string[] }) {
-    const preguntasTodas: any[] = []
+    this.ensureDetalleTable()
 
+    const preguntasTodas: any[] = []
     for (const st of d.subtemas) {
       const pack = await this.ia.generarPreguntas({
         area: d.area,
@@ -193,7 +207,7 @@ export default class SesionesService {
     return { sesion, totalPreguntas: preguntasTodas.length }
   }
 
-  // ========= QUIZ INICIAL =========
+  // ========= QUIZ INICIAL (25 preguntas agrupadas por área) =========
   async crearQuizInicial({
     id_usuario,
     id_institucion,
@@ -201,9 +215,37 @@ export default class SesionesService {
     id_usuario: number
     id_institucion?: number | null
   }) {
-    const AREAS: Area[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']
-    const pack: any[] = []
+    this.ensureDetalleTable()
 
+    type AreaKey = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
+    const ORDEN_AREAS: AreaKey[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']
+
+    // utilidades para agrupar por área de forma robusta (con/sin acentos)
+    const stripAccents = (s: string) =>
+      String(s || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+
+    const toAreaKeyOrNull = (area: string): AreaKey | null => {
+      const s = stripAccents(area)
+      if (s.startsWith('matemat')) return 'Matematicas'
+      if (s.startsWith('lengua') || s.includes('lectura')) return 'Lenguaje'
+      if (s.startsWith('ciencias nat') || s === 'naturales' || s.startsWith('ciencia')) return 'Ciencias'
+      if (s.startsWith('ciencias soc') || s.startsWith('social')) return 'Sociales'
+      if (s.startsWith('ingles') || s === 'english') return 'Ingles'
+      return null
+    }
+
+    const areaIndex = (area: string): number => {
+      const k = toAreaKeyOrNull(area)
+      if (!k) return 999
+      return ORDEN_AREAS.indexOf(k)
+    }
+
+    // pedir exactamente 5 por área
+    const AREAS: AreaKey[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']
+    const pack: any[] = []
     for (const area of AREAS) {
       const lote = await this.ia.generarPreguntas({
         area,
@@ -214,6 +256,10 @@ export default class SesionesService {
       pack.push(...lote)
     }
 
+    // ordenar agrupando por área según ORDEN_AREAS
+    pack.sort((a: any, b: any) => areaIndex(String(a?.area)) - areaIndex(String(b?.area)))
+
+    // crear sesión y detalle respetando ese orden
     const sesion = await Sesion.create({
       id_usuario,
       tipo: 'diagnostico',
@@ -253,6 +299,8 @@ export default class SesionesService {
     id_sesion: number
     respuestas: RespCierre[]
   }) {
+    this.ensureDetalleTable()
+
     await Sesion.findOrFail(id_sesion)
 
     const detalles = await SesionDetalle.query()

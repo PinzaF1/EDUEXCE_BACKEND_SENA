@@ -9,6 +9,7 @@ import { parse as parseCsv } from 'csv-parse/sync'
 import jwt, { Secret } from 'jsonwebtoken'
 
 const SECRET: Secret = (process.env.JWT_SECRET ?? 'secret123') as Secret
+const IMPORT_FIRMA = 'svc-estudiantes-uni-global-v1' // opcional: para verificar versión
 
 function normGrado(g: any): string | null {
   if (g == null) return null
@@ -51,11 +52,10 @@ export default class EstudiantesService {
     curso?: string | null
     jornada?: string | null
   }) {
-    // ► Unicidad GLOBAL por numero_documento
+    // Unicidad GLOBAL por numero_documento
     const ya = await Usuario.query()
       .where('numero_documento', d.numero_documento)
       .first()
-
     if (ya && (ya as any).id_institucion !== d.id_institucion) {
       throw new Error('El número de documento ya está registrado en otra institución')
     }
@@ -65,7 +65,6 @@ export default class EstudiantesService {
 
     const u = await Usuario.updateOrCreate(
       {
-        // Si ya existe en la misma institución, actualiza; si no, crea
         id_institucion: d.id_institucion,
         numero_documento: d.numero_documento,
       },
@@ -165,7 +164,7 @@ export default class EstudiantesService {
         parseadoComo = 'csv'
       }
 
-      // ===== DEBUG OPCIONAL =====
+      // DEBUG opcional
       const wantsDebug =
         String(request.header('x-debug') || request.qs().debug || '').toLowerCase() === '1'
       if (wantsDebug) {
@@ -173,7 +172,6 @@ export default class EstudiantesService {
         console.log('[import][dbg] rows.length =>', rows.length)
         if (rows[0]) console.log('[import][dbg] headers (crudos) =>', Object.keys(rows[0]))
       }
-      // ==========================
 
       if (!rows.length) {
         return response.badRequest({ error: 'Archivo vacío o ilegible (CSV/XLSX)' })
@@ -236,16 +234,13 @@ export default class EstudiantesService {
         return response.badRequest({ error: 'No hay registros válidos para importar' })
       }
 
-      // ► EXISTENTES en cualquier institución (SIN filtrar por institución)
+      // EXISTENTES globalmente (sin filtrar institución)
       const documentos = candidatos.map((c) => c.numero_documento)
       const existentesRows = await Usuario.query()
         .whereIn('numero_documento', documentos)
         .select(['id_usuario', 'numero_documento', 'id_institucion'])
 
-      const existePorDoc = new Map<
-        string,
-        { id_usuario: number; id_institucion: number }
-      >()
+      const existePorDoc = new Map<string, { id_usuario: number; id_institucion: number }>()
       for (const r of existentesRows) {
         existePorDoc.set(String((r as any).numero_documento), {
           id_usuario: (r as any).id_usuario,
@@ -253,20 +248,15 @@ export default class EstudiantesService {
         })
       }
 
-      // Clasificar
       const aInsertar: any[] = []
       const aActualizar: any[] = []
       const conflictosOtraInst: any[] = []
 
       for (const c of candidatos) {
         const ex = existePorDoc.get(c.numero_documento)
-        if (!ex) {
-          aInsertar.push(c)
-        } else if (ex.id_institucion === id_institucion) {
-          aActualizar.push(c)
-        } else {
-          conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
-        }
+        if (!ex) aInsertar.push(c)
+        else if (ex.id_institucion === id_institucion) aActualizar.push(c)
+        else conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
       }
 
       // insertar (solo los que NO existen en ninguna institución)
@@ -293,7 +283,7 @@ export default class EstudiantesService {
         if (u?.id_usuario) creadosDocs.push(e.numero_documento)
       }
 
-      // actualizar (solo si existe en la MISMA institución; no tocar password)
+      // actualizar (misma institución; no toca password)
       let actualizados = 0
       for (const e of aActualizar) {
         const ex = existePorDoc.get(e.numero_documento)!
@@ -314,19 +304,25 @@ export default class EstudiantesService {
         if (camb) { await u.save(); actualizados++ }
       }
 
+      const omitidos_por_existir =
+        candidatos.length - aInsertar.length - aActualizar.length - conflictosOtraInst.length
+      const omitidos_por_otras_instituciones = conflictosOtraInst.length
+      const omitidos = omitidos_por_existir + omitidos_por_otras_instituciones
+
       return response.ok({
+        firma: IMPORT_FIRMA, // opcional
         creados: creadosDocs,
         mensaje: 'Importación finalizada',
         parseado_como: parseadoComo,
         insertados: creadosDocs.length,
         actualizados,
         duplicados_en_archivo,
-        // mantenemos tu campo y sumamos el nuevo sin romper nada
-        omitidos_por_existir:
-          candidatos.length - aInsertar.length - aActualizar.length - conflictosOtraInst.length,
-        omitidos_por_otras_instituciones: conflictosOtraInst.length,
-        documentos_en_otras_instituciones: conflictosOtraInst.slice(0, 10).map((x) => x.numero_documento),
+        duplicados: duplicados_en_archivo, // ← para la UI
+        omitidos_por_existir,
+        omitidos_por_otras_instituciones,
+        documentos_en_otras_instituciones: conflictosOtraInst.slice(0, 10).map(x => x.numero_documento),
         total_leidos: rows.length,
+        omitidos,
       })
     } catch (err: any) {
       return response.badRequest({ error: 'Error al importar', detalle: err?.message || String(err) })
@@ -361,7 +357,7 @@ export default class EstudiantesService {
       return true
     })
 
-    // ► EXISTENTES globalmente
+    // EXISTENTES globalmente
     const existentesRows = await Usuario
       .query()
       .whereIn('numero_documento', candidatos.map((c) => c.numero_documento))
@@ -381,13 +377,9 @@ export default class EstudiantesService {
 
     for (const c of candidatos) {
       const ex = existePorDoc.get(c.numero_documento)
-      if (!ex) {
-        aInsertar.push(c)
-      } else if (ex.id_institucion === id_institucion) {
-        aActualizar.push(c)
-      } else {
-        conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
-      }
+      if (!ex) aInsertar.push(c)
+      else if (ex.id_institucion === id_institucion) aActualizar.push(c)
+      else conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
     }
 
     const creadosDocs: string[] = []
@@ -418,15 +410,22 @@ export default class EstudiantesService {
       if (camb) { await u.save(); actualizados++ }
     }
 
+    const omitidos_por_existir =
+      candidatos.length - aInsertar.length - aActualizar.length - conflictosOtraInst.length
+    const omitidos_por_otras_instituciones = conflictosOtraInst.length
+    const omitidos = omitidos_por_existir + omitidos_por_otras_instituciones
+
     return {
+      firma: IMPORT_FIRMA, // opcional
       creados: creadosDocs,
       insertados: creadosDocs.length,
       actualizados,
-      omitidos_por_existir:
-        candidatos.length - aInsertar.length - aActualizar.length - conflictosOtraInst.length,
-      omitidos_por_otras_instituciones: conflictosOtraInst.length,
-      documentos_en_otras_instituciones: conflictosOtraInst.slice(0, 10).map((x) => x.numero_documento),
+      omitidos_por_existir,
+      omitidos_por_otras_instituciones,
+      documentos_en_otras_instituciones: conflictosOtraInst.slice(0, 10).map(x => x.numero_documento),
       total_recibidos: filas?.length ?? 0,
+      duplicados: 0, // JSON no tiene duplicados de archivo
+      omitidos,
     }
   }
 
@@ -453,7 +452,6 @@ export default class EstudiantesService {
     try {
       const payload: any = jwt.verify(token, SECRET)
 
-      // aceptar varias etiquetas de rol
       const rol = String(payload?.rol ?? '').toLowerCase()
       const esEst =
         rol === 'estudiante' ||
@@ -465,7 +463,6 @@ export default class EstudiantesService {
         return { error: 'No autorizado, el token no corresponde a un estudiante' }
       }
 
-      // identificar id de usuario con distintas claves posibles
       const idUsuario =
         payload.id_usuario ?? payload.id ?? payload.user_id ?? payload.userId
 
@@ -478,7 +475,6 @@ export default class EstudiantesService {
         return { error: 'Perfil no encontrado' }
       }
 
-      // verificación adicional por seguridad
       if (String((est as any).rol ?? '').toLowerCase() !== 'estudiante') {
         return { error: 'El usuario no es de tipo estudiante' }
       }
@@ -519,7 +515,7 @@ export default class EstudiantesService {
     if (cambios.numero_documento !== undefined) {
       const nuevoDoc = String(cambios.numero_documento).trim()
       if (nuevoDoc && nuevoDoc !== (u as any).numero_documento) {
-        // ► Unicidad GLOBAL al editar
+        // Unicidad GLOBAL al editar
         const existe = await Usuario.query()
           .where('numero_documento', nuevoDoc)
           .whereNot('id_usuario', id_usuario)

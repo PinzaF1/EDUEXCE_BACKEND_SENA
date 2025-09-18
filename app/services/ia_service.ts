@@ -8,29 +8,49 @@ export type ParametrosGeneracion = {
   estilo_kolb?: 'Divergente' | 'Asimilador' | 'Convergente' | 'Acomodador'
   cantidad: number
   time_limit_seconds?: number
-  id_institucion?: number | null         // si no existe esa col, se ignora
-  excluir_ids?: number[]                  // opcional para evitar repetidas
+  id_institucion?: number | null
+  excluir_ids?: number[]
 }
 
 function mezclar<T>(xs: T[]) {
   return [...xs].sort(() => Math.random() - 0.5)
 }
 
+// 👇 mapa de variantes para cubrir acentos/sinónimos frecuentes
+function variantesArea(area: ParametrosGeneracion['area']): string[] {
+  switch (area) {
+    case 'Matematicas':
+      return ['Matematicas', 'Matemáticas', 'Matematica', 'Matemática']
+    case 'Ingles':
+      return ['Ingles', 'Inglés', 'English']
+    case 'Lenguaje':
+      return ['Lenguaje', 'Lengua', 'Lectura crítica', 'Lectura Critica']
+    case 'Ciencias':
+      return ['Ciencias', 'Ciencias naturales', 'Ciencia Naturales', 'Naturales']
+    case 'Sociales':
+      return ['Sociales', 'Ciencias sociales', 'Ciencias Sociales']
+    default:
+      return [area]
+  }
+}
+
 export default class IaService {
   private async fetchLocal(p: ParametrosGeneracion, usarInstitucion: boolean) {
-    // Construye el query (con o sin filtro de institución)
     const makeQuery = () => {
-      let q = BancoPregunta.query().where('area', p.area)
+      // 🔁 Usar variantes con/ sin acento
+      let q = BancoPregunta.query().whereIn('area', variantesArea(p.area))
+
       if (p.subtemas?.length) q = q.whereIn('subtema', p.subtemas)
       if (p.dificultad) q = q.where('dificultad', p.dificultad)
       if (p.estilo_kolb) q = q.where('estilo_kolb', p.estilo_kolb)
       if (p.excluir_ids?.length) q = q.whereNotIn('id_pregunta', p.excluir_ids)
+
       if (usarInstitucion && p.id_institucion) {
-        // Puede fallar si la columna NO existe → lo manejamos con try/catch
         q = q.where((builder) => {
           builder.where('id_institucion', p.id_institucion as number).orWhereNull('id_institucion')
         })
       }
+
       return q.orderBy('created_at', 'desc').limit(Math.max(10, p.cantidad * 3))
     }
 
@@ -38,10 +58,9 @@ export default class IaService {
       const candidatos = await makeQuery()
       return mezclar(candidatos).slice(0, p.cantidad)
     } catch (e: any) {
-      // Fallback cuando la columna no existe
       if (String(e?.message || '').includes('column "id_institucion" does not exist')) {
         const candidatos = await BancoPregunta.query()
-          .where('area', p.area)
+          .whereIn('area', variantesArea(p.area))
           .if(p.subtemas?.length, (q) => q.whereIn('subtema', p.subtemas!))
           .if(!!p.dificultad, (q) => q.where('dificultad', p.dificultad!))
           .if(!!p.estilo_kolb, (q) => q.where('estilo_kolb', p.estilo_kolb!))
@@ -70,7 +89,7 @@ export default class IaService {
       } catch { /* fallback local */ }
     }
 
-    // 2) Fallback local (sin depender de id_institucion)
+    // 2) Fallback local
     const lista = await this.fetchLocal(p, true)
 
     return lista.map((x: any) => ({
@@ -99,7 +118,7 @@ export default class IaService {
         area,
         cantidad: 5,
         dificultad: 'media',
-        id_institucion,           // si la columna no existe, se ignora
+        id_institucion,
       } as ParametrosGeneracion)
       packs.push(...parte)
     }
