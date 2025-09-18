@@ -19,7 +19,7 @@ export default class SesionesService {
     subtema: string
     nivel_orden: number
     usa_estilo_kolb: boolean
-    intento_actual?: number
+    intento_actual?: number // no se persiste (tu modelo no tiene 'intento')
   }) {
     const prev = await Sesion.query()
       .where('id_usuario', d.id_usuario)
@@ -30,8 +30,7 @@ export default class SesionesService {
 
     const excludeIds: number[] = []
     if (prev) {
-      const detPrev = await SesionDetalle.query().withSchema('public')
-        .where('id_sesion', prev.id_sesion)
+      const detPrev = await SesionDetalle.query().where('id_sesion', prev.id_sesion)
       excludeIds.push(...detPrev.map((x) => Number(x.id_pregunta)).filter(Boolean))
     }
 
@@ -66,16 +65,15 @@ export default class SesionesService {
       correctas: 0,
     } as any)
 
-    let orden = 1
-    for (const p of preguntas) {
-      await SesionDetalle.query().withSchema('public').insert({
-        id_sesion: (sesion as any).id_sesion,
-        id_pregunta: p.id_pregunta ?? null,
-        orden,
-        tiempo_asignado_seg: (p as any).time_limit_seconds ?? null,
-      } as any)
-      orden++
-    }
+    // Detalles (createMany)
+    const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
+    const rows = preguntas.map((p: any, i: number) => ({
+      id_sesion,
+      id_pregunta: p.id_pregunta ?? null,
+      orden: i + 1,
+      tiempo_asignado_seg: (p as any).time_limit_seconds ?? null,
+    }))
+    await SesionDetalle.createMany(rows as any)
 
     return { sesion, preguntas }
   }
@@ -86,7 +84,7 @@ export default class SesionesService {
     respuestas: Array<{ orden: number; opcion: string; tiempo_empleado_seg?: number }>
   }) {
     const ses = await Sesion.findOrFail(d.id_sesion)
-    const detalles = await SesionDetalle.query().withSchema('public')
+    const detalles = await SesionDetalle.query()
       .where('id_sesion', (ses as any).id_sesion)
       .orderBy('orden', 'asc')
 
@@ -136,6 +134,27 @@ export default class SesionesService {
     return { aprueba: correctas >= 4, correctas, puntaje: (ses as any).puntaje_porcentaje }
   }
 
+  async registrarFalloReintento(
+    id_usuario: number,
+    area: Area,
+    subtema: string,
+    nivel_orden: number
+  ) {
+    const ultimas = await Sesion.query()
+      .where('id_usuario', id_usuario)
+      .where('area', area)
+      .where('subtema', subtema)
+      .orderBy('inicio_at', 'desc')
+      .limit(3)
+
+    const perdidas = ultimas.filter((s) => (Number((s as any).correctas) || 0) < 4)
+    if (perdidas.length >= 3) {
+      const nuevoNivel = Math.max(1, nivel_orden - 1)
+      return { bajar: true, nuevoNivel }
+    }
+    return { bajar: false, nuevoNivel: nivel_orden }
+  }
+
   // ========= SIMULACRO POR ÁREA =========
   async crearSimulacroArea(d: { id_usuario: number; area: Area; subtemas: string[] }) {
     const preguntasTodas: any[] = []
@@ -162,16 +181,15 @@ export default class SesionesService {
       correctas: 0,
     } as any)
 
-    let orden = 1
-    for (const p of preguntasTodas) {
-      await SesionDetalle.query().withSchema('public').insert({
-        id_sesion: (sesion as any).id_sesion,
-        id_pregunta: p.id_pregunta ?? null,
-        orden,
-        tiempo_asignado_seg: null,
-      } as any)
-      orden++
-    }
+    const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
+    const rows = preguntasTodas.map((p: any, i: number) => ({
+      id_sesion,
+      id_pregunta: p.id_pregunta ?? null,
+      orden: i + 1,
+      tiempo_asignado_seg: null,
+    }))
+    await SesionDetalle.createMany(rows as any)
+
     return { sesion, totalPreguntas: preguntasTodas.length }
   }
 
@@ -206,16 +224,13 @@ export default class SesionesService {
     } as any)
 
     const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
-
     const rows = pack.map((p: any, i: number) => ({
       id_sesion,
       id_pregunta: p.id_pregunta,
       orden: i + 1,
       tiempo_asignado_seg: null,
     }))
-
-    //  forzamos el esquema y evitamos createMany (que no deja withSchema)
-    await SesionDetalle.query().withSchema('public').insert(rows as any)
+    await SesionDetalle.createMany(rows as any)
 
     return {
       id_sesion,
@@ -240,7 +255,7 @@ export default class SesionesService {
   }) {
     await Sesion.findOrFail(id_sesion)
 
-    const detalles = await SesionDetalle.query().withSchema('public')
+    const detalles = await SesionDetalle.query()
       .where('id_sesion', id_sesion)
       .select(['id_pregunta'])
 
