@@ -66,35 +66,33 @@ class AdminController {
   }
 
   /** Importar estudiantes (multipart: archivo | JSON: { filas }) */
-  public async importarEstudiantes(ctx: HttpContext) {
-    // ——— detección robusta de archivo ———
-    const ct = String(ctx.request.header('content-type') || '').toLowerCase()
-    const isMultipart = ct.includes('multipart/form-data')
+public async importarEstudiantes(ctx: HttpContext) {
+  // 1) Intentar SIEMPRE por archivo primero (probamos todas las claves)
+  const f1 = ctx.request.file('estudiantes', { size: '20mb' })
+  const f2 = ctx.request.file('file', { size: '20mb' })
+  const f3 = ctx.request.file('archivo', { size: '20mb' })
 
-    // intenta leer por todas las claves habituales
-    const f1 = ctx.request.file('estudiantes')
-    const f2 = ctx.request.file('file')
-    const f3 = ctx.request.file('archivo')
-
-    // allFiles() puede no existir en algunos builds → usa defensivo
-    const allFiles = (ctx.request as any).allFiles?.() ?? {}
-    const hasAnyOther = Object.keys(allFiles).length > 0
-
-    // si el CT dice multipart o encontré algún file, SIEMPRE voy al flujo subirCSV
-    if (isMultipart || f1 || f2 || f3 || hasAnyOther) {
-      return (estudiantesService as any).subirCSV(ctx)
-    }
-
-    // ——— fallback JSON { filas } ———
-    const auth = (ctx.request as any).authUsuario
-    const body: any = ctx.request.body() || {}
-    const filas = Array.isArray(body.filas)
-      ? body.filas
-      : (Array.isArray(body.estudiantes) ? body.estudiantes : [])
-
-    const data = await estudiantesService.importarMasivo(Number(auth.id_institucion), filas)
-    return ctx.response.ok(data)
+  if (f1 || f2 || f3) {
+    return (estudiantesService as any).subirCSV(ctx)
   }
+
+  // hay clientes (incluido Postman) que declaran multipart sin adjuntar nada:
+  const ct = String(ctx.request.header('content-type') || '').toLowerCase()
+  if (ct.includes('multipart/form-data')) {
+    // igual enviamos al flujo que ya maneja el error “Sube un CSV...”
+    return (estudiantesService as any).subirCSV(ctx)
+  }
+
+  // 2) Fallback JSON { filas: [...] }
+  const auth = (ctx.request as any).authUsuario
+  const body: any = ctx.request.body() || {}
+  const filas = Array.isArray(body.filas)
+    ? body.filas
+    : (Array.isArray(body.estudiantes) ? body.estudiantes : [])
+
+  const data = await estudiantesService.importarMasivo(Number(auth.id_institucion), filas)
+  return ctx.response.ok(data)
+}
 
   public async editarEstudiante({ request, response }: HttpContext) {
     const id = Number(request.param('id'))

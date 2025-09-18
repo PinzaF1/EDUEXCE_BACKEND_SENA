@@ -30,7 +30,8 @@ export default class SesionesService {
 
     const excludeIds: number[] = []
     if (prev) {
-      const detPrev = await SesionDetalle.query().where('id_sesion', prev.id_sesion)
+      const detPrev = await SesionDetalle.query().withSchema('public')
+        .where('id_sesion', prev.id_sesion)
       excludeIds.push(...detPrev.map((x) => Number(x.id_pregunta)).filter(Boolean))
     }
 
@@ -60,14 +61,14 @@ export default class SesionesService {
       subtema: d.subtema,
       usa_estilo_kolb: !!d.usa_estilo_kolb,
       nivel_orden: d.nivel_orden,
-      inicio_at: DateTime.now(),          // ✅ LUXON
+      inicio_at: DateTime.now(),
       total_preguntas: preguntas.length,
       correctas: 0,
     } as any)
 
     let orden = 1
     for (const p of preguntas) {
-      await SesionDetalle.create({
+      await SesionDetalle.query().withSchema('public').insert({
         id_sesion: (sesion as any).id_sesion,
         id_pregunta: p.id_pregunta ?? null,
         orden,
@@ -85,7 +86,7 @@ export default class SesionesService {
     respuestas: Array<{ orden: number; opcion: string; tiempo_empleado_seg?: number }>
   }) {
     const ses = await Sesion.findOrFail(d.id_sesion)
-    const detalles = await SesionDetalle.query()
+    const detalles = await SesionDetalle.query().withSchema('public')
       .where('id_sesion', (ses as any).id_sesion)
       .orderBy('orden', 'asc')
 
@@ -106,7 +107,7 @@ export default class SesionesService {
 
       ;(det as any).alternativa_elegida = r.opcion
       ;(det as any).tiempo_empleado_seg = r.tiempo_empleado_seg ?? null
-      ;(det as any).respondida_at = DateTime.now() // ✅ LUXON
+      ;(det as any).respondida_at = DateTime.now()
 
       const limite = (det as any).tiempo_asignado_seg
       const excedioTiempo =
@@ -129,31 +130,10 @@ export default class SesionesService {
     ;(ses as any).puntaje_porcentaje = Math.round(
       (correctas * 100) / Math.max(1, Number((ses as any).total_preguntas) || 5)
     )
-    ;(ses as any).fin_at = DateTime.now() // ✅ LUXON
+    ;(ses as any).fin_at = DateTime.now()
     await ses.save()
 
     return { aprueba: correctas >= 4, correctas, puntaje: (ses as any).puntaje_porcentaje }
-  }
-
-  async registrarFalloReintento(
-    id_usuario: number,
-    area: Area,
-    subtema: string,
-    nivel_orden: number
-  ) {
-    const ultimas = await Sesion.query()
-      .where('id_usuario', id_usuario)
-      .where('area', area)
-      .where('subtema', subtema)
-      .orderBy('inicio_at', 'desc')
-      .limit(3)
-
-    const perdidas = ultimas.filter((s) => (Number((s as any).correctas) || 0) < 4)
-    if (perdidas.length >= 3) {
-      const nuevoNivel = Math.max(1, nivel_orden - 1)
-      return { bajar: true, nuevoNivel }
-    }
-    return { bajar: false, nuevoNivel: nivel_orden }
   }
 
   // ========= SIMULACRO POR ÁREA =========
@@ -177,14 +157,14 @@ export default class SesionesService {
       modo: 'estandar',
       area: d.area,
       usa_estilo_kolb: false,
-      inicio_at: DateTime.now(),  // ✅ LUXON
+      inicio_at: DateTime.now(),
       total_preguntas: preguntasTodas.length,
       correctas: 0,
     } as any)
 
     let orden = 1
     for (const p of preguntasTodas) {
-      await SesionDetalle.create({
+      await SesionDetalle.query().withSchema('public').insert({
         id_sesion: (sesion as any).id_sesion,
         id_pregunta: p.id_pregunta ?? null,
         orden,
@@ -220,7 +200,7 @@ export default class SesionesService {
       id_usuario,
       tipo: 'diagnostico',
       modo: 'estandar',
-      inicio_at: DateTime.now(),  // ✅ LUXON
+      inicio_at: DateTime.now(),
       total_preguntas: pack.length,
       correctas: 0,
     } as any)
@@ -234,7 +214,8 @@ export default class SesionesService {
       tiempo_asignado_seg: null,
     }))
 
-    await SesionDetalle.createMany(rows as any)
+    //  forzamos el esquema y evitamos createMany (que no deja withSchema)
+    await SesionDetalle.query().withSchema('public').insert(rows as any)
 
     return {
       id_sesion,
@@ -249,7 +230,7 @@ export default class SesionesService {
     }
   }
 
-  // ========= QUIZ INICIAL - CERRAR y CALIFICAR =========
+  // ========= QUIZ INICIAL - CERRAR y CALIFICAR (0..100) =========
   async cerrarQuizInicial({
     id_sesion,
     respuestas,
@@ -259,7 +240,7 @@ export default class SesionesService {
   }) {
     await Sesion.findOrFail(id_sesion)
 
-    const detalles = await SesionDetalle.query()
+    const detalles = await SesionDetalle.query().withSchema('public')
       .where('id_sesion', id_sesion)
       .select(['id_pregunta'])
 

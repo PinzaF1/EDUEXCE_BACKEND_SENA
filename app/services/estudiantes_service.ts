@@ -4,7 +4,7 @@ import bcrypt from 'bcrypt'
 import Usuario from '../models/usuario.js'
 import Sesion from '../models/sesione.js'
 import fs from 'node:fs/promises'
-import  * as xlsx from 'xlsx'
+import * as xlsx from 'xlsx'
 import { parse as parseCsv } from 'csv-parse/sync'
 import jwt, { Secret } from 'jsonwebtoken'
 
@@ -51,13 +51,22 @@ export default class EstudiantesService {
     curso?: string | null
     jornada?: string | null
   }) {
+    // ► Unicidad GLOBAL por numero_documento
+    const ya = await Usuario.query()
+      .where('numero_documento', d.numero_documento)
+      .first()
+
+    if (ya && (ya as any).id_institucion !== d.id_institucion) {
+      throw new Error('El número de documento ya está registrado en otra institución')
+    }
+
     const plano = this.claveInicial(d.numero_documento, d.apellido)
     const hash = await bcrypt.hash(plano, 10)
 
     const u = await Usuario.updateOrCreate(
       {
+        // Si ya existe en la misma institución, actualiza; si no, crea
         id_institucion: d.id_institucion,
-        tipo_documento: d.tipo_documento,
         numero_documento: d.numero_documento,
       },
       {
@@ -156,14 +165,15 @@ export default class EstudiantesService {
         parseadoComo = 'csv'
       }
 
-      // ===== DEBUG OPCIONAL (no afecta la lógica/response por defecto) =====
-      const wantsDebug = String(request.header('x-debug') || request.qs().debug || '').toLowerCase() === '1'
+      // ===== DEBUG OPCIONAL =====
+      const wantsDebug =
+        String(request.header('x-debug') || request.qs().debug || '').toLowerCase() === '1'
       if (wantsDebug) {
         console.log('[import][dbg] parseadoComo =>', parseadoComo)
         console.log('[import][dbg] rows.length =>', rows.length)
         if (rows[0]) console.log('[import][dbg] headers (crudos) =>', Object.keys(rows[0]))
       }
-      // =====================================================================
+      // ==========================
 
       if (!rows.length) {
         return response.badRequest({ error: 'Archivo vacío o ilegible (CSV/XLSX)' })
@@ -226,20 +236,40 @@ export default class EstudiantesService {
         return response.badRequest({ error: 'No hay registros válidos para importar' })
       }
 
-      // existentes (MISMA institución)
+      // ► EXISTENTES en cualquier institución (SIN filtrar por institución)
       const documentos = candidatos.map((c) => c.numero_documento)
       const existentesRows = await Usuario.query()
         .whereIn('numero_documento', documentos)
-        .andWhere('id_institucion', id_institucion)
-        .select(['id_usuario', 'numero_documento'])
+        .select(['id_usuario', 'numero_documento', 'id_institucion'])
 
-      const existePorDoc = new Map<string, number>()
-      for (const r of existentesRows) existePorDoc.set(String((r as any).numero_documento), (r as any).id_usuario)
+      const existePorDoc = new Map<
+        string,
+        { id_usuario: number; id_institucion: number }
+      >()
+      for (const r of existentesRows) {
+        existePorDoc.set(String((r as any).numero_documento), {
+          id_usuario: (r as any).id_usuario,
+          id_institucion: (r as any).id_institucion,
+        })
+      }
 
-      const aInsertar = candidatos.filter((c) => !existePorDoc.has(c.numero_documento))
-      const aActualizar = candidatos.filter((c) => existePorDoc.has(c.numero_documento))
+      // Clasificar
+      const aInsertar: any[] = []
+      const aActualizar: any[] = []
+      const conflictosOtraInst: any[] = []
 
-      // insertar
+      for (const c of candidatos) {
+        const ex = existePorDoc.get(c.numero_documento)
+        if (!ex) {
+          aInsertar.push(c)
+        } else if (ex.id_institucion === id_institucion) {
+          aActualizar.push(c)
+        } else {
+          conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
+        }
+      }
+
+      // insertar (solo los que NO existen en ninguna institución)
       const creadosDocs: string[] = []
       for (const e of aInsertar) {
         const plano = this.claveInicial(e.numero_documento, e.apellido)
@@ -263,11 +293,11 @@ export default class EstudiantesService {
         if (u?.id_usuario) creadosDocs.push(e.numero_documento)
       }
 
-      // actualizar (sin tocar password)
+      // actualizar (solo si existe en la MISMA institución; no tocar password)
       let actualizados = 0
       for (const e of aActualizar) {
-        const id_usuario = existePorDoc.get(e.numero_documento)!
-        const u = await Usuario.findOrFail(id_usuario)
+        const ex = existePorDoc.get(e.numero_documento)!
+        const u = await Usuario.findOrFail(ex.id_usuario)
         let camb = 0
         const set = (k: keyof any, val: any) => {
           if ((u as any)[k] !== val) { (u as any)[k] = val; camb++ }
@@ -291,17 +321,12 @@ export default class EstudiantesService {
         insertados: creadosDocs.length,
         actualizados,
         duplicados_en_archivo,
-        omitidos_por_existir: candidatos.length - aInsertar.length - aActualizar.length,
+        // mantenemos tu campo y sumamos el nuevo sin romper nada
+        omitidos_por_existir:
+          candidatos.length - aInsertar.length - aActualizar.length - conflictosOtraInst.length,
+        omitidos_por_otras_instituciones: conflictosOtraInst.length,
+        documentos_en_otras_instituciones: conflictosOtraInst.slice(0, 10).map((x) => x.numero_documento),
         total_leidos: rows.length,
-        ...(wantsDebug ? {
-          debug: {
-            headers_normalizados: rows[0] ? Object.keys(rows[0]) : [],
-            candidatos: candidatos.length,
-            muestra: candidatos.slice(0, 2),
-            documentos_a_insertar: aInsertar.map(a => a.numero_documento).slice(0, 5),
-            documentos_existentes: aActualizar.map(a => a.numero_documento).slice(0, 5),
-          }
-        } : {})
       })
     } catch (err: any) {
       return response.badRequest({ error: 'Error al importar', detalle: err?.message || String(err) })
@@ -336,17 +361,34 @@ export default class EstudiantesService {
       return true
     })
 
+    // ► EXISTENTES globalmente
     const existentesRows = await Usuario
       .query()
       .whereIn('numero_documento', candidatos.map((c) => c.numero_documento))
-      .andWhere('id_institucion', id_institucion)
-      .select(['id_usuario', 'numero_documento'])
+      .select(['id_usuario', 'numero_documento', 'id_institucion'])
 
-    const existePorDoc = new Map<string, number>()
-    for (const r of existentesRows) existePorDoc.set(String((r as any).numero_documento), (r as any).id_usuario)
+    const existePorDoc = new Map<string, { id_usuario: number; id_institucion: number }>()
+    for (const r of existentesRows) {
+      existePorDoc.set(String((r as any).numero_documento), {
+        id_usuario: (r as any).id_usuario,
+        id_institucion: (r as any).id_institucion,
+      })
+    }
 
-    const aInsertar = candidatos.filter((c) => !existePorDoc.has(c.numero_documento))
-    const aActualizar = candidatos.filter((c) => existePorDoc.has(c.numero_documento))
+    const aInsertar: any[] = []
+    const aActualizar: any[] = []
+    const conflictosOtraInst: any[] = []
+
+    for (const c of candidatos) {
+      const ex = existePorDoc.get(c.numero_documento)
+      if (!ex) {
+        aInsertar.push(c)
+      } else if (ex.id_institucion === id_institucion) {
+        aActualizar.push(c)
+      } else {
+        conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
+      }
+    }
 
     const creadosDocs: string[] = []
     for (const e of aInsertar) {
@@ -358,8 +400,8 @@ export default class EstudiantesService {
 
     let actualizados = 0
     for (const e of aActualizar) {
-      const id_usuario = existePorDoc.get(e.numero_documento)!
-      const u = await Usuario.findOrFail(id_usuario)
+      const ex = existePorDoc.get(e.numero_documento)!
+      const u = await Usuario.findOrFail(ex.id_usuario)
       let camb = 0
       const set = (k: keyof any, val: any) => {
         if ((u as any)[k] !== val) { (u as any)[k] = val; camb++ }
@@ -380,7 +422,10 @@ export default class EstudiantesService {
       creados: creadosDocs,
       insertados: creadosDocs.length,
       actualizados,
-      omitidos_por_existir: candidatos.length - aInsertar.length - aActualizar.length,
+      omitidos_por_existir:
+        candidatos.length - aInsertar.length - aActualizar.length - conflictosOtraInst.length,
+      omitidos_por_otras_instituciones: conflictosOtraInst.length,
+      documentos_en_otras_instituciones: conflictosOtraInst.slice(0, 10).map((x) => x.numero_documento),
       total_recibidos: filas?.length ?? 0,
     }
   }
@@ -474,12 +519,12 @@ export default class EstudiantesService {
     if (cambios.numero_documento !== undefined) {
       const nuevoDoc = String(cambios.numero_documento).trim()
       if (nuevoDoc && nuevoDoc !== (u as any).numero_documento) {
+        // ► Unicidad GLOBAL al editar
         const existe = await Usuario.query()
           .where('numero_documento', nuevoDoc)
-          .andWhere('id_institucion', (u as any).id_institucion)
           .whereNot('id_usuario', id_usuario)
           .first()
-        if (existe) throw new Error('El número de documento ya existe en la institución')
+        if (existe) throw new Error('El número de documento ya existe (en esta u otra institución)')
         ;(u as any).numero_documento = nuevoDoc
       }
     }
