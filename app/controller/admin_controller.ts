@@ -1,3 +1,4 @@
+// app/controllers/admin_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import DashboardAdminService from '../services/dashboard_admin_service.js'
 import SeguimientoAdminService from '../services/seguimiento_admin_service.js'
@@ -12,7 +13,6 @@ const notificacionesService = new NotificacionesService()
 const perfilService = new PerfilService()
 
 class AdminController {
-  // EP-03: Dashboard institucional
   public async dashboard({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     await notificacionesService.generarParaInstitucion(auth.id_institucion)
@@ -20,7 +20,6 @@ class AdminController {
     return response.ok(data)
   }
 
-  // EP-04: Seguimiento institucional
   public async seguimiento({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const data = await (seguimientoService as any).resumenMensual(Number(auth.id_institucion))
@@ -28,7 +27,6 @@ class AdminController {
   }
 
   // ===== Estudiantes =====
-
   public async listarEstudiantes({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const q = request.qs()
@@ -42,7 +40,6 @@ class AdminController {
     return response.ok(data)
   }
 
-  // Crear 1 estudiante — mapeamos nombres/apellidos → nombre/apellido
   public async crearEstudiante({ request, response }: HttpContext) {
     try {
       const auth = (request as any).authUsuario
@@ -52,8 +49,8 @@ class AdminController {
         id_institucion: Number(auth.id_institucion),
         tipo_documento: String(b.tipo_documento || '').trim(),
         numero_documento: String(b.numero_documento || '').trim(),
-        nombre: String(b.nombre ?? b.nombres ?? '').trim(),       // <-- nombre
-        apellido: String(b.apellido ?? b.apellidos ?? '').trim(), // <-- apellido
+        nombre: String(b.nombre ?? b.nombres ?? '').trim(),
+        apellido: String(b.apellido ?? b.apellidos ?? '').trim(),
         correo: b.correo ? String(b.correo).toLowerCase() : null,
         direccion: b.direccion ?? null,
         telefono: b.telefono ?? null,
@@ -68,17 +65,53 @@ class AdminController {
     }
   }
 
-  // Importación masiva (arreglo 'filas' en el body)
-  public async importarEstudiantes({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const filas = (request.body() as any).filas ?? []
+  /** Importar estudiantes (multipart: archivo | JSON: { filas }) */
+  public async importarEstudiantes(ctx: HttpContext) {
+    // ——— detección robusta de archivo ———
+    const ct = String(ctx.request.header('content-type') || '').toLowerCase()
+    const isMultipart = ct.includes('multipart/form-data')
+
+    // intenta leer por todas las claves habituales
+    const f1 = ctx.request.file('estudiantes')
+    const f2 = ctx.request.file('file')
+    const f3 = ctx.request.file('archivo')
+
+    // allFiles() puede no existir en algunos builds → usa defensivo
+    const allFiles = (ctx.request as any).allFiles?.() ?? {}
+    const hasAnyOther = Object.keys(allFiles).length > 0
+
+    // si el CT dice multipart o encontré algún file, SIEMPRE voy al flujo subirCSV
+    if (isMultipart || f1 || f2 || f3 || hasAnyOther) {
+      return (estudiantesService as any).subirCSV(ctx)
+    }
+
+    // ——— fallback JSON { filas } ———
+    const auth = (ctx.request as any).authUsuario
+    const body: any = ctx.request.body() || {}
+    const filas = Array.isArray(body.filas)
+      ? body.filas
+      : (Array.isArray(body.estudiantes) ? body.estudiantes : [])
+
     const data = await estudiantesService.importarMasivo(Number(auth.id_institucion), filas)
-    return response.ok(data)
+    return ctx.response.ok(data)
   }
 
   public async editarEstudiante({ request, response }: HttpContext) {
     const id = Number(request.param('id'))
-    const cambios = request.only(['correo', 'grado', 'curso', 'jornada', 'nombre', 'apellido', 'is_active']) as any
+    const cambios = request.only([
+      'tipo_documento',
+      'numero_documento',
+      'correo',
+      'direccion',
+      'telefono',
+      'grado',
+      'curso',
+      'jornada',
+      'nombre',
+      'apellido',
+      'is_active',
+    ]) as any
+
     const data = await estudiantesService.editar(id, cambios)
     return response.ok(data)
   }

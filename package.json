@@ -45,6 +45,7 @@
     "@types/luxon": "^3.7.1",
     "@types/node": "^22.18.3",
     "@types/nodemailer": "^7.0.1",
+    "@types/xlsx": "^0.0.35",
     "eslint": "^9.26.0",
     "hot-hook": "^0.4.0",
     "pino-pretty": "^13.0.0",
@@ -63,13 +64,15 @@
     "@vinejs/vine": "^3.0.1",
     "axios": "^1.12.2",
     "bcrypt": "^6.0.0",
+    "csv-parse": "^6.1.0",
     "csv-parser": "^3.2.0",
     "jsonwebtoken": "^9.0.2",
     "luxon": "^3.7.1",
     "nodemailer": "^7.0.6",
     "pg": "^8.16.3",
     "react-router-dom": "^7.8.0",
-    "reflect-metadata": "^0.2.2"
+    "reflect-metadata": "^0.2.2",
+    "xlsx": "^0.18.5"
   },
   "hotHook": {
     "boundaries": [

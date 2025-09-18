@@ -3,11 +3,10 @@ import Usuario from '../models/usuario.js'
 import Institucion from '../models/institucione.js'
 
 export default class PerfilService {
-  /** === NUEVO: usado por GET /admin/perfil === */
+
   async verInstitucion(id_institucion: number) {
     const inst = await Institucion.findOrFail(id_institucion)
 
-    // Normalizamos y duplicamos claves para snake_case / camelCase
     const id = (inst as any).id_institucion ?? (inst as any).id ?? null
     const nombre = (inst as any).nombre_institucion ?? (inst as any).nombre ?? null
     const codigo = (inst as any).codigo_dane ?? null
@@ -21,19 +20,16 @@ export default class PerfilService {
 
     return {
       institucion: {
-        id_institucion: id,         // snake
+
         idInstitucion: String(id),  // camel (string para quien lo necesite)
         nombre_institucion: nombre,
-        nombreInstitucion: nombre,
         codigo_dane: codigo,
-        codigoDane: codigo,
         ciudad,
         departamento,
         direccion,
         telefono,
         jornada,
         correo,
-        logo_url: logo,
         logoUrl: logo,
       },
       // si quieres algo dinámico, colócalo aquí; para Admin: fijo
@@ -41,7 +37,7 @@ export default class PerfilService {
     }
   }
 
-  // === Lo que ya tenías ===
+
 
   // Estudiante: puede editar correo, telefono, direccion, foto_perfil
   async actualizarPerfilEstudiante(id_usuario: number, d: {

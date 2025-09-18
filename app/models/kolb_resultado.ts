@@ -38,4 +38,6 @@ export default class KolbResultado extends BaseModel {
 
   @belongsTo(() => EstilosAprendizaje, { foreignKey: 'id_estilos_aprendizajes' })
   declare estilo: BelongsTo<typeof EstilosAprendizaje>
+  alumno: any
+  totales: any
 }

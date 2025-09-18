@@ -19,14 +19,11 @@ export default class KolbService {
   }
 
   async enviarRespuestas(id_usuario: number, respuestasIn: RespuestaKolb[] | string) {
-    // 1) Parsear/normalizar el body
+    // 1) Parseo / validación básica
     let respuestas: any[] = []
     if (typeof respuestasIn === 'string') {
-      try {
-        respuestas = JSON.parse(respuestasIn)
-      } catch {
-        throw new Error('El campo "respuestas" debe ser un JSON válido')
-      }
+      try { respuestas = JSON.parse(respuestasIn) } 
+      catch { throw new Error('El campo "respuestas" debe ser un JSON válido') }
     } else if (Array.isArray(respuestasIn)) {
       respuestas = respuestasIn
     } else {
@@ -34,7 +31,6 @@ export default class KolbService {
     }
     if (!respuestas.length) throw new Error('Respuestas vacías')
 
-    // 2) Normalizar/castear números y validar Kolb (1..4 sin repetir por ítem)
     const limpias = respuestas.map((r) => ({
       id_item: Number(r.id_item),
       valor_ec: Number(r.valor_ec),
@@ -53,18 +49,13 @@ export default class KolbService {
       }
     }
 
-    // 3) Totales por dimensión
+    // 2) Totales
     const tot = limpias.reduce(
-      (a, r) => ({
-        ec: a.ec + r.valor_ec,
-        or: a.or + r.valor_or,
-        ca: a.ca + r.valor_ca,
-        ea: a.ea + r.valor_ea,
-      }),
+      (a, r) => ({ ec: a.ec + r.valor_ec, or: a.or + r.valor_or, ca: a.ca + r.valor_ca, ea: a.ea + r.valor_ea }),
       { ec: 0, or: 0, ca: 0, ea: 0 }
     )
 
-    // 4) Determinar estilo (top 2)
+    // 3) Determinar estilo (top2)
     const arr = [
       { k: 'EC', v: tot.ec },
       { k: 'OR', v: tot.or },
@@ -79,40 +70,94 @@ export default class KolbService {
     else if (top2 === 'EC+EA') nombreEstilo = 'ACOMODADOR'
     else nombreEstilo = 'DIVERGENTE'
 
-    // 5) Buscar definición en catálogo (tabla estilos_aprendizajes sembrada)
     const estiloRow = await EstilosAprendizaje.findBy('estilo', nombreEstilo)
-    if (!estiloRow) {
-      throw new Error('Catálogo de estilos no inicializado (falta seed de estilos_aprendizajes)')
+    if (!estiloRow) throw new Error('Catálogo de estilos no inicializado')
+
+    // 4) Intento principal: guardar con nombres LARGOS (los que tiene tu modelo)
+    const where = { id_usuario }
+    const basePayload = {
+      id_usuario,
+      id_estilos_aprendizajes: estiloRow.id_estilos_aprendizajes,
+      fecha_presentacion: DateTime.now(),
+      respuestas_json: JSON.stringify(limpias),
     }
 
-    // 6) Guardar resultado (usa Luxon + JSON.stringify para jsonb)
-    await KolbResultado.updateOrCreate(
-      { id_usuario },
-      {
-        id_usuario,
-        id_estilos_aprendizajes: estiloRow.id_estilos_aprendizajes,
-        fecha_presentacion: DateTime.now(),
-        total_experiencia_concreta: tot.ec,
-        total_observacion_reflexiva: tot.or,
-        total_conceptualizacion_abstracta: tot.ca,
-        total_experimentacion_activa: tot.ea,
+    const payloadLargo = {
+      ...basePayload,
+      total_experiencia_concreta: tot.ec,
+      total_observacion_reflexiva: tot.or,
+      total_conceptualizacion_abstracta: tot.ca,
+      total_experimentacion_activa: tot.ea,
+    }
 
-        respuestas_json: JSON.stringify(limpias), // <- asegura JSON válido
+    try {
+      await KolbResultado.updateOrCreate(where, payloadLargo as any)
+    } catch (e: any) {
+      // Si tu tabla en realidad NO tiene esas columnas (usa total_ec/total_or/total_ca/total_ea),
+      // PG lanza 42703. En ese caso, guardamos SIN esos campos (quedan dentro del JSON).
+      const msg = e?.message || ''
+      if (e?.code === '42703' || /column .* does not exist/i.test(msg)) {
+        await KolbResultado.updateOrCreate(where, basePayload as any)
+      } else {
+        throw e
       }
-    )
+    }
 
     return { estilo: nombreEstilo, totales: tot }
   }
 
   async obtenerResultado(id_usuario: number) {
-    // Devuelve el último resultado + datos del estilo
-    const res = await KolbResultado
+    const row = await KolbResultado
       .query()
       .where('id_usuario', id_usuario)
-      .preload('estilo') // si definiste relación belongsTo en el modelo
+      .preload('estilo')
+      .preload('usuario') // por si quieres mostrar nombre/documento
       .orderBy('fecha_presentacion', 'desc')
       .first()
 
-    return res
+    if (!row) return null
+
+    // Si existen columnas largas, úsalas. Si no, calcula desde respuestas_json.
+    let totales: { ec: number; or: number; ca: number; ea: number } = { ec: 0, or: 0, ca: 0, ea: 0 }
+
+    const tieneLargos =
+      (row as any).total_experiencia_concreta != null &&
+      (row as any).total_observacion_reflexiva != null &&
+      (row as any).total_conceptualizacion_abstracta != null &&
+      (row as any).total_experimentacion_activa != null
+
+    if (tieneLargos) {
+      totales = {
+        ec: Number((row as any).total_experiencia_concreta) || 0,
+        or: Number((row as any).total_observacion_reflexiva) || 0,
+        ca: Number((row as any).total_conceptualizacion_abstracta) || 0,
+        ea: Number((row as any).total_experimentacion_activa) || 0,
+      }
+    } else {
+      // Recalcular desde el JSON
+      let arr: any[] = []
+      try {
+        arr = Array.isArray((row as any).respuestas_json)
+          ? (row as any).respuestas_json
+          : JSON.parse((row as any).respuestas_json || '[]')
+      } catch {
+        arr = []
+      }
+      totales = arr.reduce(
+        (a, r) => ({
+          ec: a.ec + Number(r?.valor_ec || 0),
+          or: a.or + Number(r?.valor_or || 0),
+          ca: a.ca + Number(r?.valor_ca || 0),
+          ea: a.ea + Number(r?.valor_ea || 0),
+        }),
+        { ec: 0, or: 0, ca: 0, ea: 0 }
+      )
+    }
+
+    // Para que tu MovilController siga usando res.alumno y res.totales:
+    ;(row as any).alumno = (row as any).usuario
+    ;(row as any).totales = totales
+
+    return row
   }
 }
