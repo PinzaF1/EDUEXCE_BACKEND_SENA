@@ -1,3 +1,4 @@
+// app/controllers/movil_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import KolbService from '../services/kolb_service.js'
 import SesionesService from '../services/sesiones_service.js'
@@ -16,6 +17,7 @@ const logrosService = new LogrosService()
 const retosService = new RetosService()
 
 class MovilController {
+  // ================= PERFIL =================
   async perfilEstudiante({ request, response }: HttpContext) {
     const authHeader = request.header('Authorization')
     if (!authHeader) return response.unauthorized({ error: 'Token obligatorio' })
@@ -24,7 +26,7 @@ class MovilController {
     return response.ok(resultado)
   }
 
-  // EP-11: Kolb
+  // ================= KOLB =================
   public async kolbItems({ response }: HttpContext) {
     const data = await kolbService.obtenerItems()
     return response.ok(data)
@@ -43,21 +45,20 @@ class MovilController {
     if (!res) return response.notFound({ error: 'Sin resultado de Kolb' })
     return response.ok({
       estudiante: `${res.alumno?.nombre ?? ''} ${res.alumno?.apellido ?? ''}`.trim(),
-      documento:  res.alumno?.numero_documento ?? null,
-      fecha:      res.fecha_presentacion,
-      estilo:     res.estilo,
-      totales:    res.totales,
+      documento: res.alumno?.numero_documento ?? null,
+      fecha: res.fecha_presentacion,
+      estilo: res.estilo,
+      totales: res.totales,
     })
   }
 
-  // EP-13/14: Paradas y simulacros
+  // ============ PARADAS / PRÁCTICAS ============
   public async crearParada({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const p = request.only(['area', 'subtema', 'nivel_orden', 'usa_estilo_kolb', 'intento_actual']) as any
 
-    // ←← FIX: asegurar strings definidos
-    const area     = String(p.area ?? '').trim()
-    const subtema  = String(p.subtema ?? '').trim()
+    const area = String(p.area ?? '').trim()
+    const subtema = String(p.subtema ?? '').trim()
     if (!area || !subtema) {
       return response.badRequest({ error: 'Los campos "area" y "subtema" son obligatorios' })
     }
@@ -75,12 +76,24 @@ class MovilController {
   }
 
   public async cerrarSesion({ request, response }: HttpContext) {
+    // Acepta ambos formatos:
+    // - [{ orden, opcion, tiempo_empleado_seg? }]
+    // - [{ id_pregunta, respuesta?|seleccion?, tiempo_empleado_seg? }]
     const body = request.only(['id_sesion', 'respuestas']) as any
-    const data = await sesionesService.cerrarSesion(body as any)
+    const id_sesion = Number(body.id_sesion)
+    const respuestas = Array.isArray(body.respuestas) ? body.respuestas : []
+
+    const data = await sesionesService.cerrarSesion({
+      id_sesion,
+      respuestas,
+    } as any)
+
+    // data incluye: correctas, puntaje, puntajes_por_area, puntaje_general y detalle con explicación
     return response.ok(data)
   }
 
-   public async crearSimulacro({ request, response }: HttpContext) {
+  // ============ SIMULACRO POR ÁREA ============
+  public async crearSimulacro({ request, response }: HttpContext) {
     try {
       const auth = (request as any).authUsuario
       const body = request.only(['area', 'subtemas']) as any
@@ -108,14 +121,14 @@ class MovilController {
     }
   }
 
-  // EP-15: Progreso / historial
+  // ============ PROGRESO / HISTORIAL ============
   public async progreso({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const data = await progresoService.resumenEstudiante(auth.id_usuario)
     return response.ok(data)
   }
 
-  // EP-16: Ranking / Logros
+  // ============ RANKING / LOGROS ============
   public async ranking({ response }: HttpContext) {
     const data = await (rankingService as any).top5()
     return response.ok(data)
@@ -127,7 +140,7 @@ class MovilController {
     return response.ok(data)
   }
 
-  // EP-17: Retos
+  // ============ RETOS ============
   public async crearReto({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const datos = request.all() as any
@@ -156,7 +169,7 @@ class MovilController {
     return response.ok(data)
   }
 
-  // ===== EP-12: Quiz inicial (diagnóstico) =====
+  // ============ QUIZ INICIAL (DIAGNÓSTICO) ============
   public async quizInicialIniciar({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const data = await (sesionesService as any).crearQuizInicial({
@@ -169,10 +182,13 @@ class MovilController {
   public async quizInicialCerrar({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const { id_sesion, respuestas } = request.only(['id_sesion', 'respuestas']) as any
+
     const data = await (sesionesService as any).cerrarQuizInicial({
       id_sesion: Number(id_sesion),
       respuestas: Array.isArray(respuestas) ? respuestas : [],
     })
+
+    // Devuelve lo que pide: puntajes por área, global y detalle con explicación
     return response.ok({ id_usuario: auth.id_usuario, ...data })
   }
 }
