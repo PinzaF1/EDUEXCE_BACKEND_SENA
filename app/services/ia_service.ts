@@ -1,4 +1,3 @@
-// app/services/ia_service.ts
 import axios from 'axios'
 import BancoPregunta from '../models/banco_pregunta.js'
 
@@ -32,10 +31,10 @@ export default class IaService {
   private async fetchLocal(p: ParametrosGeneracion, usarInstitucion: boolean) {
     const makeQuery = () => {
       let q = BancoPregunta.query().whereIn('area', variantesArea(p.area))
-      if (p.subtemas?.length) q = q.whereIn('subtema', p.subtemas)
-      if (p.dificultad)       q = q.where('dificultad', p.dificultad)
-      if (p.estilo_kolb)      q = q.where('estilo_kolb', p.estilo_kolb)
-      if (p.excluir_ids?.length) q = q.whereNotIn('id_pregunta', p.excluir_ids)
+      if (p.subtemas?.length)     q = q.whereIn('subtema', p.subtemas)
+      if (p.dificultad)           q = q.where('dificultad', p.dificultad)
+      if (p.estilo_kolb)          q = q.where('estilo_kolb', p.estilo_kolb)
+      if (p.excluir_ids?.length)  q = q.whereNotIn('id_pregunta', p.excluir_ids)
       if (usarInstitucion && p.id_institucion) {
         q = q.where((b) => {
           b.where('id_institucion', p.id_institucion as number).orWhereNull('id_institucion')

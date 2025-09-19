@@ -1,4 +1,3 @@
-// app/services/sesiones_service.ts
 import Sesion from '../models/sesione.js'
 import SesionDetalle from '../models/sesiones_detalle.js'
 import IaService from './ia_service.js'
@@ -63,7 +62,7 @@ export default class SesionesService {
     // ========== 1) Intento principal (IA/local con filtros estrictos) ==========
     let preguntas: any[] = await this.ia.generarPreguntas({
       area,
-      subtemas: [subtema],         // puede dejar vacío si no hay match exacto
+      subtemas: [subtema],
       dificultad: 'facil',
       estilo_kolb,
       cantidad: 5,
@@ -96,7 +95,7 @@ export default class SesionesService {
           .orderByRaw('random()')
           .limit(5)
       } catch {
-        // b) si unaccent no está disponible (ej. RDS muy minimalista)
+        // b) si unaccent no está disponible
         base = await BancoPregunta.query()
           .whereILike('area', `%${area}%`)
           .andWhereILike('subtema', `%${subtema}%`)
@@ -142,7 +141,6 @@ export default class SesionesService {
 
     // ========== 3) Fallback FINAL GARANTIZADO (solo por ÁREA) ==========
     if (!preguntas || preguntas.length === 0) {
-      // pedir 5 por área, sin filtrar subtema ni estilo
       const packArea = await this.ia.generarPreguntas({
         area,
         cantidad: 5,
@@ -154,7 +152,6 @@ export default class SesionesService {
       if (packArea && packArea.length) {
         preguntas = packArea
       } else {
-        // ultra fallback directo al banco por área, muy permisivo
         const ultra = await BancoPregunta.query()
           .whereILike('area', `%${area}%`)
           .if(excludeIds.length > 0, (qb) => qb.whereNotIn('id_pregunta', excludeIds))
@@ -329,9 +326,7 @@ export default class SesionesService {
       try {
         const extra = await BancoPregunta.query()
           .whereRaw('unaccent(lower(area)) = unaccent(lower(?))', [area])
-          .andWhere((qb) => {
-            qb.whereILike('subtema', `%${subtemas[0]}%`)
-          })
+          .andWhere((qb) => { qb.whereILike('subtema', `%${subtemas[0]}%`) })
           .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
           .orderByRaw('random()')
           .limit(faltan())
@@ -500,33 +495,65 @@ export default class SesionesService {
 
     const ids = detalles.map((d: any) => Number(d.id_pregunta)).filter(Boolean)
     if (!ids.length) {
-      return { id_sesion, puntajes_por_area: {}, puntaje_general: 0 }
+      return { id_sesion, puntajes_por_area: {}, puntaje_general: 0, detalle: [] }
     }
 
     const banco = await BancoPregunta.query().whereIn('id_pregunta', ids)
     const correctaDe = new Map<number, string>()
     const areaDe = new Map<number, string>()
+    const explicacionDe = new Map<number, string>()
 
     for (const b of banco) {
       const idp = Number((b as any).id_pregunta)
       correctaDe.set(idp, String((b as any).respuesta_correcta).trim().toUpperCase())
       areaDe.set(idp, String((b as any).area))
+      if ((b as any).explicacion) explicacionDe.set(idp, String((b as any).explicacion))
     }
 
+    // Normaliza formas: {id_pregunta, respuesta} | {id_pregunta, seleccion} | {id_pregunta, opcion}
+    const normalizadas = (Array.isArray(respuestas) ? respuestas : []).map((r: any) => {
+      const idp = Number(r.id_pregunta ?? r.idPregunta ?? r.id ?? null)
+      const marc = String(
+        r.respuesta ?? r.seleccion ?? r.opcion ?? r.alternativa ?? ''
+      ).trim().toUpperCase()
+      return { id_pregunta: idp, respuesta: marc }
+    }).filter(x => Number.isFinite(x.id_pregunta))
+
+    // Conteos por área
     const porArea: Record<string, { total: number; ok: number }> = {}
     for (const idp of ids) {
-      const area = areaDe.get(idp) || 'Desconocida'
-      porArea[area] = porArea[area] || { total: 0, ok: 0 }
-      porArea[area].total += 1
+      const a = areaDe.get(idp) || 'Desconocida'
+      porArea[a] = porArea[a] || { total: 0, ok: 0 }
+      porArea[a].total += 1
     }
 
-    for (const r of respuestas) {
+    const detalle: Array<{
+      id_pregunta: number
+      area: string | null
+      correcta: string | null
+      marcada: string | null
+      es_correcta: boolean
+      explicacion?: string | null
+    }> = []
+
+    for (const r of normalizadas) {
       const idp = Number(r.id_pregunta)
-      const marcada = String(r.respuesta || '').trim().toUpperCase()
-      const correcta = correctaDe.get(idp)
+      const marcada = r.respuesta
+      const correcta = correctaDe.get(idp) || null
       const area = areaDe.get(idp) || 'Desconocida'
       if (!porArea[area]) porArea[area] = { total: 0, ok: 0 }
-      if (marcada && correcta && marcada === correcta) porArea[area].ok += 1
+
+      const ok = !!(marcada && correcta && marcada === correcta)
+      if (ok) porArea[area].ok += 1
+
+      detalle.push({
+        id_pregunta: idp,
+        area,
+        correcta,
+        marcada,
+        es_correcta: ok,
+        explicacion: explicacionDe.get(idp) ?? null,
+      })
     }
 
     const puntajes: Record<string, number> = {}
@@ -543,6 +570,6 @@ export default class SesionesService {
     const puntajeGeneral =
       totalPreguntas > 0 ? Math.round((totalCorrectas / totalPreguntas) * 100) : 0
 
-    return { id_sesion, puntajes_por_area: puntajes, puntaje_general: puntajeGeneral }
+    return { id_sesion, puntajes_por_area: puntajes, puntaje_general: puntajeGeneral, detalle }
   }
 }
