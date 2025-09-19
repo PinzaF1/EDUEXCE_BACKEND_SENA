@@ -1,17 +1,18 @@
 // app/services/sesiones_service.ts
-import { DateTime } from 'luxon'
 import Sesion from '../models/sesione.js'
 import SesionDetalle from '../models/sesiones_detalle.js'
-import BancoPregunta from '../models/banco_pregunta.js'
 import IaService from './ia_service.js'
 import EstilosAprendizaje from '../models/estilos_aprendizaje.js'
+import BancoPregunta from '../models/banco_pregunta.js'
+import { DateTime } from 'luxon'
 
 type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
+type RespCierre = { id_pregunta: number; respuesta: string }
 
 export default class SesionesService {
   ia = new IaService()
 
-  /** Forzar nombre calificado de la tabla detalle sin tocar el modelo */
+  /** Forzar tabla calificada para el detalle (sin tocar el modelo) */
   private ensureDetalleTable() {
     const expected = 'public.sesiones_detalles'
     // @ts-ignore
@@ -21,7 +22,7 @@ export default class SesionesService {
     }
   }
 
-  // ========== PARADA ==========
+  // ========= PARADA =========
   async crearParada(d: {
     id_usuario: number
     area: Area
@@ -32,10 +33,15 @@ export default class SesionesService {
   }) {
     this.ensureDetalleTable()
 
+    const area = String(d.area ?? '').trim()
+    const subtema = String(d.subtema ?? '').trim()
+    if (!area || !subtema) throw new Error('area y subtema son obligatorios')
+
+    // excluir preguntas de la última sesión del mismo subtema
     const prev = await Sesion.query()
       .where('id_usuario', d.id_usuario)
-      .where('area', d.area)
-      .where('subtema', d.subtema)
+      .where('area', area)
+      .where('subtema', subtema)
       .orderBy('inicio_at', 'desc')
       .first()
 
@@ -45,17 +51,19 @@ export default class SesionesService {
       excludeIds.push(...detPrev.map((x) => Number((x as any).id_pregunta)).filter(Boolean))
     }
 
+    // estilo Kolb opcional
     let estilo_kolb: any = undefined
     try {
       if (d.usa_estilo_kolb) {
         const k = await EstilosAprendizaje.findBy('id_usuario', d.id_usuario)
         estilo_kolb = (k as any)?.estilo
       }
-    } catch {}
+    } catch { /* ignore */ }
 
-    const preguntas = await this.ia.generarPreguntas({
-      area: d.area,
-      subtemas: [d.subtema],
+    // ========== 1) Intento principal (IA/local con filtros estrictos) ==========
+    let preguntas: any[] = await this.ia.generarPreguntas({
+      area,
+      subtemas: [subtema],         // puede dejar vacío si no hay match exacto
       dificultad: 'facil',
       estilo_kolb,
       cantidad: 5,
@@ -63,12 +71,115 @@ export default class SesionesService {
       excluir_ids: excludeIds,
     } as any)
 
+    // ========== 2) Fallback: Banco por área + subtema (insensible a tildes) ==========
+    if (!preguntas || preguntas.length === 0) {
+      const yaTomadas = new Set<number>(excludeIds)
+
+      const mapBanco = (rows: any[]) =>
+        rows.map((b: any) => ({
+          id_pregunta: b.id_pregunta,
+          area: b.area,
+          subtema: b.subtema,
+          dificultad: (b as any).dificultad ?? 'facil',
+          pregunta: (b as any).pregunta,
+          opciones: (b as any).opciones,
+          time_limit_seconds: (b as any).tiempo_limite_seg ?? null,
+        }))
+
+      // a) área exacta (sin acentos) + subtema parecido
+      let base: any[] = []
+      try {
+        base = await BancoPregunta.query()
+          .whereRaw('unaccent(lower(area)) = unaccent(lower(?))', [area])
+          .andWhereRaw('unaccent(lower(subtema)) LIKE unaccent(lower(?))', [`%${subtema}%`])
+          .if(excludeIds.length > 0, (qb) => qb.whereNotIn('id_pregunta', excludeIds))
+          .orderByRaw('random()')
+          .limit(5)
+      } catch {
+        // b) si unaccent no está disponible (ej. RDS muy minimalista)
+        base = await BancoPregunta.query()
+          .whereILike('area', `%${area}%`)
+          .andWhereILike('subtema', `%${subtema}%`)
+          .if(excludeIds.length > 0, (qb) => qb.whereNotIn('id_pregunta', excludeIds))
+          .orderByRaw('random()')
+          .limit(5)
+      }
+
+      const agg: any[] = []
+      for (const r of base) {
+        const id = Number((r as any).id_pregunta)
+        if (!yaTomadas.has(id)) { yaTomadas.add(id); agg.push(r) }
+      }
+
+      // c) completar hasta 5 con cualquier subtema del MISMO área
+      const need = Math.max(0, 5 - agg.length)
+      if (need > 0) {
+        try {
+          const extra = await BancoPregunta.query()
+            .whereRaw('unaccent(lower(area)) = unaccent(lower(?))', [area])
+            .if(yaTomadas.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(yaTomadas)))
+            .orderByRaw('random()')
+            .limit(need)
+          for (const r of extra) {
+            const id = Number((r as any).id_pregunta)
+            if (!yaTomadas.has(id)) { yaTomadas.add(id); agg.push(r) }
+          }
+        } catch {
+          const extra = await BancoPregunta.query()
+            .whereILike('area', `%${area}%`)
+            .if(yaTomadas.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(yaTomadas)))
+            .orderByRaw('random()')
+            .limit(need)
+          for (const r of extra) {
+            const id = Number((r as any).id_pregunta)
+            if (!yaTomadas.has(id)) { yaTomadas.add(id); agg.push(r) }
+          }
+        }
+      }
+
+      preguntas = mapBanco(agg.slice(0, 5))
+    }
+
+    // ========== 3) Fallback FINAL GARANTIZADO (solo por ÁREA) ==========
+    if (!preguntas || preguntas.length === 0) {
+      // pedir 5 por área, sin filtrar subtema ni estilo
+      const packArea = await this.ia.generarPreguntas({
+        area,
+        cantidad: 5,
+        dificultad: 'facil',
+        id_institucion: null,
+        excluir_ids: excludeIds,
+      } as any)
+
+      if (packArea && packArea.length) {
+        preguntas = packArea
+      } else {
+        // ultra fallback directo al banco por área, muy permisivo
+        const ultra = await BancoPregunta.query()
+          .whereILike('area', `%${area}%`)
+          .if(excludeIds.length > 0, (qb) => qb.whereNotIn('id_pregunta', excludeIds))
+          .orderByRaw('random()')
+          .limit(5)
+
+        preguntas = ultra.map((b: any) => ({
+          id_pregunta: b.id_pregunta,
+          area: b.area,
+          subtema: b.subtema,
+          dificultad: (b as any).dificultad ?? 'facil',
+          pregunta: (b as any).pregunta,
+          opciones: (b as any).opciones,
+          time_limit_seconds: (b as any).tiempo_limite_seg ?? null,
+        }))
+      }
+    }
+
+    // crear sesión
     const sesion = await Sesion.create({
       id_usuario: d.id_usuario,
       tipo: 'practica',
       modo: 'estandar',
-      area: d.area,
-      subtema: d.subtema,
+      area,
+      subtema,
       usa_estilo_kolb: !!d.usa_estilo_kolb,
       nivel_orden: d.nivel_orden,
       inicio_at: DateTime.now(),
@@ -76,6 +187,7 @@ export default class SesionesService {
       correctas: 0,
     } as any)
 
+    // detalle
     const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
     const rows = preguntas.map((p: any, i: number) => ({
       id_sesion,
@@ -85,6 +197,7 @@ export default class SesionesService {
     }))
     await SesionDetalle.createMany(rows as any)
 
+    // respuesta
     return {
       sesion,
       preguntas: preguntas.map((p: any) => ({
@@ -98,16 +211,10 @@ export default class SesionesService {
     }
   }
 
-  // ========== CERRAR SESIÓN (parada/simulacro) ==========
-  // Acepta:
-  //  - { orden, opcion }  (formato antiguo)
-  //  - { id_pregunta, respuesta? | seleccion? } (formato nuevo)
+  // ========= CERRAR SESIÓN =========
   async cerrarSesion(d: {
     id_sesion: number
-    respuestas: Array<
-      | { orden: number; opcion: string; tiempo_empleado_seg?: number }
-      | { id_pregunta: number; respuesta?: string; seleccion?: string; tiempo_empleado_seg?: number }
-    >
+    respuestas: Array<{ orden: number; opcion: string; tiempo_empleado_seg?: number }>
   }) {
     this.ensureDetalleTable()
 
@@ -116,100 +223,88 @@ export default class SesionesService {
       .where('id_sesion', (ses as any).id_sesion)
       .orderBy('orden', 'asc')
 
-    const porOrden = new Map<number, { letra: string; tiempo?: number }>()
-    const porId = new Map<number, { letra: string; tiempo?: number }>()
-    for (const r of d.respuestas || []) {
-      const anyR = r as any
-      if (anyR.orden != null && anyR.opcion != null) {
-        porOrden.set(Number(anyR.orden), { letra: String(anyR.opcion).trim().toUpperCase(), tiempo: anyR.tiempo_empleado_seg ?? undefined })
-      } else if (anyR.id_pregunta != null) {
-        const letra = String(anyR.respuesta ?? anyR.seleccion ?? '').trim().toUpperCase()
-        if (letra) porId.set(Number(anyR.id_pregunta), { letra, tiempo: anyR.tiempo_empleado_seg ?? undefined })
-      }
-    }
-
     const idsPreg = detalles.map((x) => Number((x as any).id_pregunta)).filter(Boolean)
     const banco = idsPreg.length ? await BancoPregunta.query().whereIn('id_pregunta', idsPreg) : []
     const correctaDe = new Map<number, string>()
-    const areaDe = new Map<number, string>()
-    const explicacionDe = new Map<number, string | null>()
     for (const b of banco) {
-      const idp = Number((b as any).id_pregunta)
-      correctaDe.set(idp, String((b as any).respuesta_correcta).trim().toUpperCase())
-      areaDe.set(idp, String((b as any).area))
-      explicacionDe.set(idp, (b as any).explicacion ?? null)
-    }
-
-    const porArea: Record<string, { total: number; ok: number }> = {}
-    for (const idp of idsPreg) {
-      const area = areaDe.get(idp) || 'Desconocida'
-      porArea[area] = porArea[area] || { total: 0, ok: 0 }
-      porArea[area].total += 1
+      correctaDe.set(
+        Number((b as any).id_pregunta),
+        String((b as any).respuesta_correcta).trim().toUpperCase()
+      )
     }
 
     let correctas = 0
-    const ahora = DateTime.now()
-    const detalleResp: any[] = []
+    for (const r of d.respuestas) {
+      const det = detalles.find((x) => Number((x as any).orden) === Number(r.orden))
+      if (!det) continue
 
-    for (const det of detalles) {
-      const idp = Number((det as any).id_pregunta)
-      const ord = Number((det as any).orden)
+      ;(det as any).alternativa_elegida = r.opcion
+      ;(det as any).tiempo_empleado_seg = r.tiempo_empleado_seg ?? null
+      ;(det as any).respondida_at = DateTime.now()
 
-      const marcadaInfo = porId.get(idp) ?? porOrden.get(ord) ?? null
-      const marcada = marcadaInfo?.letra ?? null
-      const correcta = correctaDe.get(idp) || null
-      const area = areaDe.get(idp) || 'Desconocida'
+      const limite = (det as any).tiempo_asignado_seg
+      const excedioTiempo =
+        limite != null && (r.tiempo_empleado_seg == null || r.tiempo_empleado_seg > limite)
 
-      const es_correcta = !!(marcada && correcta && marcada === correcta)
-      if (es_correcta) { correctas++; porArea[area].ok += 1 }
+      let esCorrecta = false
+      if (!excedioTiempo) {
+        const idp = Number((det as any).id_pregunta)
+        const correcta = correctaDe.get(idp)
+        const marcada = String(r.opcion || '').trim().toUpperCase()
+        esCorrecta = !!correcta && marcada === correcta
+      }
 
-      ;(det as any).alternativa_elegida = marcada
-      ;(det as any).es_correcta = es_correcta
-      ;(det as any).tiempo_empleado_seg = marcadaInfo?.tiempo ?? null
-      ;(det as any).respondida_at = ahora
+      if (esCorrecta) correctas++
+      ;(det as any).es_correcta = esCorrecta
       await det.save()
-
-      detalleResp.push({
-        id_pregunta: idp,
-        area,
-        marcada,
-        correcta,
-        es_correcta,
-        explicacion: explicacionDe.get(idp) ?? null,
-      })
     }
 
     ;(ses as any).correctas = correctas
     ;(ses as any).puntaje_porcentaje = Math.round(
-      (correctas * 100) / Math.max(1, Number((ses as any).total_preguntas) || 1)
+      (correctas * 100) / Math.max(1, Number((ses as any).total_preguntas) || 5)
     )
-    ;(ses as any).fin_at = ahora
+    ;(ses as any).fin_at = DateTime.now()
     await ses.save()
 
-    const puntajes_por_area: Record<string, number> = {}
-    let totalPreguntas = 0
-    for (const [a, agg] of Object.entries(porArea)) {
-      puntajes_por_area[a] = agg.total > 0 ? Math.round((agg.ok / agg.total) * 100) : 0
-      totalPreguntas += agg.total
-    }
-    const puntaje_general = totalPreguntas > 0 ? Math.round((correctas / totalPreguntas) * 100) : 0
-
-    return { id_sesion: d.id_sesion, correctas, puntaje: (ses as any).puntaje_porcentaje, puntajes_por_area, puntaje_general, detalle: detalleResp }
+    return { aprueba: correctas >= 4, correctas, puntaje: (ses as any).puntaje_porcentaje }
   }
 
-  // ========== SIMULACRO POR ÁREA ==========
+  async registrarFalloReintento(
+    id_usuario: number,
+    area: Area,
+    subtema: string,
+    nivel_orden: number
+  ) {
+    const ultimas = await Sesion.query()
+      .where('id_usuario', id_usuario)
+      .where('area', area)
+      .where('subtema', subtema)
+      .orderBy('inicio_at', 'desc')
+      .limit(3)
+
+    const perdidas = ultimas.filter((s) => (Number((s as any).correctas) || 0) < 4)
+    if (perdidas.length >= 3) {
+      const nuevoNivel = Math.max(1, nivel_orden - 1)
+      return { bajar: true, nuevoNivel }
+    }
+    return { bajar: false, nuevoNivel: nivel_orden }
+  }
+
+  // ========= SIMULACRO POR ÁREA =========
   async crearSimulacroArea(d: { id_usuario: number; area: Area; subtemas: string[] }) {
     this.ensureDetalleTable()
 
+    const area = String(d.area ?? '').trim() as Area
+    const subtemas = Array.isArray(d.subtemas) ? d.subtemas.filter(Boolean) : []
     const TARGET = 25
+
     const elegidas: any[] = []
     const ya = new Set<number>()
 
-    // IA primero
     try {
       const pack = await this.ia.generarPreguntas({
-        area: d.area,
-        subtemas: d.subtemas,
+        area,
+        subtemas,
         dificultad: 'media',
         cantidad: TARGET,
         id_institucion: null,
@@ -218,29 +313,66 @@ export default class SesionesService {
         const id = Number((p as any).id_pregunta)
         if (!ya.has(id) && elegidas.length < TARGET) { ya.add(id); elegidas.push(p) }
       }
-    } catch {}
+    } catch { /* ignore */ }
 
-    // Si faltan, completa con banco del área
-    if (elegidas.length < TARGET) {
-      const extra = await BancoPregunta.query()
-        .whereIn('area', [d.area, 'Inglés', 'Lenguaje', 'Ciencias', 'Matematicas', 'Sociales']) // seguridad
-        .where('area', d.area)
-        .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
-        .orderByRaw('random()')
-        .limit(TARGET - elegidas.length)
+    const faltan = () => TARGET - elegidas.length
+    const toMapped = (r: any) => ({
+      id_pregunta: (r as any).id_pregunta,
+      area: (r as any).area,
+      subtema: (r as any).subtema,
+      dificultad: (r as any).dificultad ?? 'media',
+      pregunta: (r as any).pregunta,
+      opciones: (r as any).opciones,
+    })
 
-      for (const r of extra) {
-        const id = Number((r as any).id_pregunta)
-        if (!ya.has(id) && elegidas.length < TARGET) {
-          ya.add(id)
-          elegidas.push({
-            id_pregunta: (r as any).id_pregunta,
-            area: (r as any).area,
-            subtema: (r as any).subtema,
-            dificultad: (r as any).dificultad ?? 'media',
-            pregunta: (r as any).pregunta,
-            opciones: (r as any).opciones,
+    if (faltan() > 0 && subtemas.length) {
+      try {
+        const extra = await BancoPregunta.query()
+          .whereRaw('unaccent(lower(area)) = unaccent(lower(?))', [area])
+          .andWhere((qb) => {
+            qb.whereILike('subtema', `%${subtemas[0]}%`)
           })
+          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+          .orderByRaw('random()')
+          .limit(faltan())
+        for (const r of extra) {
+          const id = Number((r as any).id_pregunta)
+          if (!ya.has(id) && elegidas.length < TARGET) { ya.add(id); elegidas.push(toMapped(r)) }
+        }
+      } catch {
+        const extra = await BancoPregunta.query()
+          .whereILike('area', `%${area}%`)
+          .andWhereILike('subtema', `%${subtemas[0]}%`)
+          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+          .orderByRaw('random()')
+          .limit(faltan())
+        for (const r of extra) {
+          const id = Number((r as any).id_pregunta)
+          if (!ya.has(id) && elegidas.length < TARGET) { ya.add(id); elegidas.push(toMapped(r)) }
+        }
+      }
+    }
+
+    if (faltan() > 0) {
+      try {
+        const extra = await BancoPregunta.query()
+          .whereRaw('unaccent(lower(area)) = unaccent(lower(?))', [area])
+          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+          .orderByRaw('random()')
+          .limit(faltan())
+        for (const r of extra) {
+          const id = Number((r as any).id_pregunta)
+          if (!ya.has(id) && elegidas.length < TARGET) { ya.add(id); elegidas.push(toMapped(r)) }
+        }
+      } catch {
+        const extra = await BancoPregunta.query()
+          .whereILike('area', `%${area}%`)
+          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+          .orderByRaw('random()')
+          .limit(faltan())
+        for (const r of extra) {
+          const id = Number((r as any).id_pregunta)
+          if (!ya.has(id) && elegidas.length < TARGET) { ya.add(id); elegidas.push(toMapped(r)) }
         }
       }
     }
@@ -249,7 +381,7 @@ export default class SesionesService {
       id_usuario: d.id_usuario,
       tipo: 'simulacro',
       modo: 'estandar',
-      area: d.area,
+      area,
       usa_estilo_kolb: false,
       inicio_at: DateTime.now(),
       total_preguntas: elegidas.length,
@@ -279,16 +411,21 @@ export default class SesionesService {
     }
   }
 
-  // ========== QUIZ INICIAL (25: 5 por área, agrupadas) ==========
-  async crearQuizInicial({ id_usuario, id_institucion }: { id_usuario: number; id_institucion?: number | null }) {
+  // ========= QUIZ INICIAL =========
+  async crearQuizInicial({
+    id_usuario,
+    id_institucion,
+  }: { id_usuario: number; id_institucion?: number | null }) {
     this.ensureDetalleTable()
 
     type AreaKey = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
     const ORDEN_AREAS: AreaKey[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']
 
-    const strip = (s: string) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-    const asKey = (a: string): AreaKey | null => {
-      const s = strip(a)
+    const stripAccents = (s: string) =>
+      String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+    const toAreaKeyOrNull = (a: string): AreaKey | null => {
+      const s = stripAccents(a)
       if (s.startsWith('matemat')) return 'Matematicas'
       if (s.startsWith('lengua') || s.includes('lectura')) return 'Lenguaje'
       if (s.startsWith('ciencias nat') || s === 'naturales' || s.startsWith('ciencia')) return 'Ciencias'
@@ -296,9 +433,10 @@ export default class SesionesService {
       if (s.startsWith('ingles') || s === 'english') return 'Ingles'
       return null
     }
-    const idx = (a: string) => {
-      const k = asKey(a)
-      return k ? ORDEN_AREAS.indexOf(k) : 999
+    const areaIndex = (a: string): number => {
+      const k = toAreaKeyOrNull(a)
+      if (!k) return 999
+      return ORDEN_AREAS.indexOf(k)
     }
 
     const AREAS: AreaKey[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']
@@ -312,8 +450,9 @@ export default class SesionesService {
       } as any)
       pack.push(...lote)
     }
-    // Agrupar por área en el orden fijo
-    pack.sort((a: any, b: any) => idx(String(a?.area)) - idx(String(b?.area)))
+
+    // agrupar por área
+    pack.sort((a: any, b: any) => areaIndex(String(a?.area)) - areaIndex(String(b?.area)))
 
     const sesion = await Sesion.create({
       id_usuario,
@@ -346,46 +485,32 @@ export default class SesionesService {
     }
   }
 
-  // ========== QUIZ INICIAL - CERRAR (guarda, compara, explica, puntajes) ==========
+  // ========= QUIZ INICIAL - CERRAR =========
   async cerrarQuizInicial({
     id_sesion,
     respuestas,
-  }: {
-    id_sesion: number
-    respuestas: Array<{ id_pregunta: number; respuesta?: string; seleccion?: string; tiempo_empleado_seg?: number }>
-  }) {
+  }: { id_sesion: number; respuestas: RespCierre[] }) {
     this.ensureDetalleTable()
 
-    const ses = await Sesion.findOrFail(id_sesion)
+    await Sesion.findOrFail(id_sesion)
+
     const detalles = await SesionDetalle.query()
       .where('id_sesion', id_sesion)
-      .orderBy('orden', 'asc')
+      .select(['id_pregunta'])
 
     const ids = detalles.map((d: any) => Number(d.id_pregunta)).filter(Boolean)
     if (!ids.length) {
-      return { id_sesion, puntajes_por_area: {}, puntaje_general: 0, detalle: [] }
+      return { id_sesion, puntajes_por_area: {}, puntaje_general: 0 }
     }
 
     const banco = await BancoPregunta.query().whereIn('id_pregunta', ids)
     const correctaDe = new Map<number, string>()
     const areaDe = new Map<number, string>()
-    const explicacionDe = new Map<number, string | null>()
+
     for (const b of banco) {
       const idp = Number((b as any).id_pregunta)
-      correctaDe.set(idp, String((b as any).respuesta_correcta || '').trim().toUpperCase())
-      areaDe.set(idp, String((b as any).area || 'Desconocida'))
-      explicacionDe.set(idp, (b as any).explicacion ?? null)
-    }
-
-    const marcadas = new Map<number, { letra: string; tiempo?: number }>()
-    for (const r of respuestas || []) {
-      const idp = Number((r as any).id_pregunta)
-      const letra = String((r as any).respuesta ?? (r as any).seleccion ?? '')
-        .trim()
-        .toUpperCase()
-      if (idp && letra) {
-        marcadas.set(idp, { letra, tiempo: (r as any).tiempo_empleado_seg ?? undefined })
-      }
+      correctaDe.set(idp, String((b as any).respuesta_correcta).trim().toUpperCase())
+      areaDe.set(idp, String((b as any).area))
     }
 
     const porArea: Record<string, { total: number; ok: number }> = {}
@@ -395,49 +520,29 @@ export default class SesionesService {
       porArea[area].total += 1
     }
 
-    let totalCorrectas = 0
-    const ahora = DateTime.now()
-    const detalle: any[] = []
-
-    for (const det of detalles) {
-      const idp = Number((det as any).id_pregunta)
+    for (const r of respuestas) {
+      const idp = Number(r.id_pregunta)
+      const marcada = String(r.respuesta || '').trim().toUpperCase()
+      const correcta = correctaDe.get(idp)
       const area = areaDe.get(idp) || 'Desconocida'
-      const correcta = correctaDe.get(idp) || null
-
-      const marcadaInfo = marcadas.get(idp)
-      const marcada = marcadaInfo?.letra ?? null
-      const es_correcta = !!(marcada && correcta && marcada === correcta)
-      if (es_correcta) { totalCorrectas++; porArea[area].ok += 1 }
-
-      ;(det as any).alternativa_elegida = marcada
-      ;(det as any).es_correcta = es_correcta
-      ;(det as any).tiempo_empleado_seg = marcadaInfo?.tiempo ?? null
-      ;(det as any).respondida_at = ahora
-      await det.save()
-
-      detalle.push({
-        id_pregunta: idp,
-        area,
-        marcada,
-        correcta,
-        es_correcta,
-        explicacion: explicacionDe.get(idp) ?? null,
-      })
+      if (!porArea[area]) porArea[area] = { total: 0, ok: 0 }
+      if (marcada && correcta && marcada === correcta) porArea[area].ok += 1
     }
 
-    const puntajes_por_area: Record<string, number> = {}
+    const puntajes: Record<string, number> = {}
+    let totalCorrectas = 0
     let totalPreguntas = 0
+
     for (const [a, agg] of Object.entries(porArea)) {
-      puntajes_por_area[a] = agg.total > 0 ? Math.round((agg.ok / agg.total) * 100) : 0
+      const score = agg.total > 0 ? Math.round((agg.ok / agg.total) * 100) : 0
+      puntajes[a] = score
+      totalCorrectas += agg.ok
       totalPreguntas += agg.total
     }
-    const puntaje_general = totalPreguntas > 0 ? Math.round((totalCorrectas / totalPreguntas) * 100) : 0
 
-    ;(ses as any).correctas = totalCorrectas
-    ;(ses as any).puntaje_porcentaje = puntaje_general
-    ;(ses as any).fin_at = ahora
-    await ses.save()
+    const puntajeGeneral =
+      totalPreguntas > 0 ? Math.round((totalCorrectas / totalPreguntas) * 100) : 0
 
-    return { id_sesion, puntajes_por_area, puntaje_general, detalle }
+    return { id_sesion, puntajes_por_area: puntajes, puntaje_general: puntajeGeneral }
   }
 }
