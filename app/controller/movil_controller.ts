@@ -54,14 +54,23 @@ class MovilController {
   public async crearParada({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const p = request.only(['area', 'subtema', 'nivel_orden', 'usa_estilo_kolb', 'intento_actual']) as any
+
+    // ←← FIX: asegurar strings definidos
+    const area     = String(p.area ?? '').trim()
+    const subtema  = String(p.subtema ?? '').trim()
+    if (!area || !subtema) {
+      return response.badRequest({ error: 'Los campos "area" y "subtema" son obligatorios' })
+    }
+
     const data = await sesionesService.crearParada({
       id_usuario: auth.id_usuario,
-      area: p.area,
-      subtema: p.subtema,
+      area,
+      subtema,
       nivel_orden: Number(p.nivel_orden || 1),
       usa_estilo_kolb: !!p.usa_estilo_kolb,
-      intento_actual: Number(p.intento_actual || 1), // no se guarda, solo influye si quisieras
+      intento_actual: Number(p.intento_actual || 1),
     } as any)
+
     return response.created(data)
   }
 
@@ -71,13 +80,32 @@ class MovilController {
     return response.ok(data)
   }
 
-  public async crearSimulacro({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const { area, subtemas } = request.only(['area', 'subtemas']) as any
-    const data = await sesionesService.crearSimulacroArea(
-      { id_usuario: auth.id_usuario, area, subtemas } as any
-    )
-    return response.created(data)
+   public async crearSimulacro({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const body = request.only(['area', 'subtemas']) as any
+
+      const area = String(body.area || '').trim()
+      const subtemas = Array.isArray(body.subtemas) ? body.subtemas : []
+
+      if (!area || subtemas.length === 0) {
+        return response.badRequest({
+          error: 'Los campos "area" y "subtemas" son obligatorios',
+        })
+      }
+
+      const data = await sesionesService.crearSimulacroArea({
+        id_usuario: Number(auth.id_usuario),
+        area: area as any,
+        subtemas: subtemas.map((s: any) => String(s).trim()),
+      })
+
+      return response.created(data)
+    } catch (e: any) {
+      return response.badRequest({
+        error: e?.message || 'No se pudo crear el simulacro',
+      })
+    }
   }
 
   // EP-15: Progreso / historial
