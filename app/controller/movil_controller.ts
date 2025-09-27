@@ -121,12 +121,36 @@ class MovilController {
     }
   }
 
-  // ============ PROGRESO / HISTORIAL ============
-  public async progreso({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const data = await progresoService.resumenEstudiante(auth.id_usuario)
-    return response.ok(data)
-  }
+  // PROGRESO
+public async progresoResumen({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await progresoService.resumenGeneral(auth.id_usuario)
+  return response.ok(data)
+}
+
+public async progresoPorMaterias({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await progresoService.porMaterias(auth.id_usuario)
+  return response.ok(data)
+}
+
+public async progresoHistorial({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const { materia, page, limit, desde, hasta } = request.qs() as any
+  const data = await progresoService.historial(auth.id_usuario, {
+    materia, page: Number(page ?? 1), limit: Number(limit ?? 20), desde, hasta
+  })
+  return response.ok(data)
+}
+
+public async progresoHistorialDetalle({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const id_sesion = Number(request.param('id_sesion'))
+  const data = await progresoService.historialDetalle(auth.id_usuario, id_sesion)
+  if (!data) return response.notFound({ error: 'Simulacro no encontrado' })
+  return response.ok(data)
+}
+
 
   // ============ RANKING / LOGROS ============
   public async ranking({ response }: HttpContext) {

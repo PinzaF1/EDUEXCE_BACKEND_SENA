@@ -47,7 +47,12 @@ Route.post('sesion/parada', (ctx) => new MovilController().crearParada(ctx)).use
 Route.post('sesion/cerrar', (ctx) => new MovilController().cerrarSesion(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/simulacro', (ctx) => new MovilController().crearSimulacro(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
-Route.get('movil/progreso', (ctx) => new MovilController().progreso(ctx)).use(onlyRol({ rol: 'estudiante' }))
+// start/routes.ts
+Route.get('movil/progreso/resumen',   (ctx) => new MovilController().progresoResumen(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/progreso/materias',  (ctx) => new MovilController().progresoPorMaterias(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/progreso/historial', (ctx) => new MovilController().progresoHistorial(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/progreso/historial/:id_sesion', (ctx) => new MovilController().progresoHistorialDetalle(ctx)).use(onlyRol({ rol: 'estudiante' }))
+
 Route.get('movil/ranking', (ctx) => new MovilController().ranking(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/logros', (ctx) => new MovilController().misLogros(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
