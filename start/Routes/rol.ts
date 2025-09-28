@@ -47,12 +47,22 @@ Route.post('sesion/parada', (ctx) => new MovilController().crearParada(ctx)).use
 Route.post('sesion/cerrar', (ctx) => new MovilController().cerrarSesion(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/simulacro', (ctx) => new MovilController().crearSimulacro(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
-// start/routes.ts
+// PROGRESO MOVIL
 Route.get('movil/progreso/resumen',   (ctx) => new MovilController().progresoResumen(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/materias',  (ctx) => new MovilController().progresoPorMaterias(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/historial', (ctx) => new MovilController().progresoHistorial(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/historial/:id_sesion', (ctx) => new MovilController().progresoHistorialDetalle(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
+//SEGUIMIENTO WEB
+Route.get('web/seguimiento/resumen',            (ctx) => new AdminController().webSeguimientoResumen(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('web/seguimiento/cursos',             (ctx) => new AdminController().webSeguimientoCursos(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('web/seguimiento/areas-refuerzo',     (ctx) => new AdminController().webAreasRefuerzo(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('web/seguimiento/estudiantes-alerta', (ctx) => new AdminController().webEstudiantesAlerta(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('web/seguimiento/areas/activos',      (ctx) => new AdminController().webAreasActivos(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('web/seguimiento/series/progreso-por-area', (ctx) => new AdminController().webSerieProgresoPorArea(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('web/seguimiento/rendimiento-por-area',     (ctx) => new AdminController().webRendimientoPorArea(ctx)).use(onlyRol({ rol: 'administrador' }))
+
+// RANKING / LOGROS
 Route.get('movil/ranking', (ctx) => new MovilController().ranking(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/logros', (ctx) => new MovilController().misLogros(ctx)).use(onlyRol({ rol: 'estudiante' }))
 

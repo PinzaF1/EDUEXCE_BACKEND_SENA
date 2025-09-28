@@ -170,6 +170,75 @@ public async importarEstudiantes(ctx: HttpContext) {
     )
     return ok ? response.ok({ ok: true }) : response.badRequest({ error: 'No se pudo cambiar contraseña' })
   }
+
+  // ====== WEB: KPIs superiores (Promedio Actual, Mejora, Participando) ======
+public async webSeguimientoResumen({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await (dashboardService as any).kpisResumen(Number(auth.id_institucion))
+  return response.ok(data)
+}
+
+// ====== WEB: Comparativo por Cursos ======
+public async webSeguimientoCursos({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await (dashboardService as any).comparativoPorCursos(Number(auth.id_institucion))
+  return response.ok(data)
+}
+
+// ====== WEB: Áreas que necesitan refuerzo ======
+public async webAreasRefuerzo({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const umbral = Number((request.qs() as any).umbral ?? 60)
+  const data = await (dashboardService as any).areasRefuerzo(Number(auth.id_institucion), umbral)
+  return response.ok(data)
+}
+
+// ====== WEB: Estudiantes que requieren atención ======
+public async webEstudiantesAlerta({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const { umbral = 50, min_intentos = 2 } = request.qs() as any
+  const data = await (dashboardService as any).estudiantesAlerta(Number(auth.id_institucion), {
+    umbral: Number(umbral),
+    min_intentos: Number(min_intentos),
+  })
+  return response.ok(data)
+}
+
+// ====== WEB: Cards de estudiantes activos por área (mes actual) ======
+public async webAreasActivos({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await (dashboardService as any).tarjetasPorArea(Number(auth.id_institucion))
+  // opcional: mismo formato de “islas” que usas en el resumen
+  const areas = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles'] as const
+  const islas = areas.map((area) => ({ area, activos: (data as any)[area] || 0 }))
+  return response.ok({ islas })
+}
+
+// ====== WEB: Serie Progreso por Área (últimos N meses) ======
+public async webSerieProgresoPorArea({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const meses = Number((request.qs() as any).meses ?? 6)
+  const series = await (dashboardService as any).progresoMensualPorArea(Number(auth.id_institucion), meses)
+  // aplanado para el gráfico de líneas
+  const flat = Object.entries(series).flatMap(([area, puntos]: any) =>
+    puntos.map((p: any) => ({ mes: p.mes, area, valor: p.promedio }))
+  )
+  return response.ok({ series: flat })
+}
+
+// ====== WEB: Rendimiento por Área (mes actual) ======
+public async webRendimientoPorArea({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const now = new Date()
+  const rend = await (dashboardService as any).rendimientoDelMes(
+    Number(auth.id_institucion),
+    now.getFullYear(),
+    now.getMonth() + 1
+  )
+  const items = Object.entries(rend).map(([area, promedio]) => ({ area, promedio }))
+  return response.ok({ items })
+}
+  
 }
 
 export default AdminController
