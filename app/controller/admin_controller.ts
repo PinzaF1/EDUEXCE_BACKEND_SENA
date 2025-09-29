@@ -178,20 +178,40 @@ public async webSeguimientoResumen({ request, response }: HttpContext) {
   return response.ok(data)
 }
 
-// ====== WEB: Comparativo por Cursos ======
+
 public async webSeguimientoCursos({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
-  const data = await (dashboardService as any).comparativoPorCursos(Number(auth.id_institucion))
-  return response.ok(data)
+  // usa tu servicio correcto
+  const data = await (seguimientoService as any).comparativoPorCursos(Number(auth.id_institucion))
+  // adapta nombres para la UI (items + progreso)
+  const items = (Array.isArray(data) ? data : []).map((r: any) => ({
+    curso: String(r?.curso ?? ''),
+    estudiantes: Number(r?.estudiantes ?? 0),
+    promedio: Number(r?.promedio ?? 0),
+    progreso: Number(r?.progreso_pct ?? 0), // <- renombrado
+  }))
+  return response.ok({ items })
 }
+
 
 // ====== WEB: Áreas que necesitan refuerzo ======
 public async webAreasRefuerzo({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
-  const umbral = Number((request.qs() as any).umbral ?? 60)
-  const data = await (dashboardService as any).areasRefuerzo(Number(auth.id_institucion), umbral)
-  return response.ok(data)
+  const q = request.qs() as any
+  const crit = Number(q.umbral ?? 60)              // % crítico
+  const aten = Number(q.umbral_atencion ?? 30)     // % atención
+  const up   = Number(q.umbral_puntaje ?? 60)      // puntaje mínimo
+
+  const { areas } = await (seguimientoService as any).areasQueNecesitanRefuerzo(
+    Number(auth.id_institucion),
+    crit,
+    aten,
+    up
+  )
+
+  return response.ok({ areas })
 }
+
 
 // ====== WEB: Estudiantes que requieren atención ======
 public async webEstudiantesAlerta({ request, response }: HttpContext) {

@@ -16,7 +16,6 @@ Route.post('auth/recovery/estudiante/enviar', (ctx) => new AuthController().envi
 Route.post('auth/recovery/estudiante/restablecer', (ctx) => new AuthController().restablecerEstudiante(ctx))
 
 // ADMIN (web)
-Route.get('admin/dashboard', (ctx) => new AdminController().dashboard(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('admin/seguimiento', (ctx) => new AdminController().seguimiento(ctx)).use(onlyRol({ rol: 'administrador' }))
 
 Route.get('admin/estudiantes', (ctx) => new AdminController().listarEstudiantes(ctx)).use(onlyRol({ rol: 'administrador' }))

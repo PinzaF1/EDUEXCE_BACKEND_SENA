@@ -34,53 +34,203 @@ export default class SeguimientoAdminService {
   }
 
   // 2) Comparativo por cursos (mes actual): promedio y progreso % vs mes anterior
-  async comparativoPorCursos(id_institucion: number) {
-    const { inicio, fin } = rangoMes(new Date())
-    const estudiantes = await Usuario.query().where('rol','estudiante').where('id_institucion', id_institucion)
+  // 2) Comparativo por cursos (mes actual): promedio y progreso (delta de puntos) vs mes anterior
+async comparativoPorCursos(id_institucion: number) {
+  const { inicio, fin } = rangoMes(new Date())
+  const inicioPrev = new Date(inicio.getFullYear(), inicio.getMonth() - 1, 1)
+  const finPrev = inicio
 
-    const cursos = [...new Set(estudiantes.map((e) => (e as any).curso).filter(Boolean))]
-    const out: Array<{curso: string; estudiantes: number; promedio: number; progreso_pct: number}> = []
+  // Trae estudiantes (no existe 'grupo' en tu esquema)
+  const estudiantes = await Usuario.query()
+    .where('rol', 'estudiante')
+    .where('id_institucion', id_institucion)
+    .select(['id_usuario', 'grado', 'curso'])
 
-    for (const curso of cursos) {
-      const ids = estudiantes.filter(e => (e as any).curso === curso).map(e => e.id_usuario)
-      const mes = await Sesion.query().whereIn('id_usuario', ids).where('inicio_at','>=',inicio as any).where('inicio_at','<',fin as any)
-      const prev = await Sesion.query().whereIn('id_usuario', ids)
-        .where('inicio_at','>=', new Date(inicio.getFullYear(), inicio.getMonth()-1, 1) as any)
-        .where('inicio_at','<', inicio as any)
-
-      const avgMes = mes.length ? Math.round(mes.reduce((a,b)=> a + ((b as any).puntaje_porcentaje||0),0)/mes.length) : 0
-      const avgPrev = prev.length ? Math.round(prev.reduce((a,b)=> a + ((b as any).puntaje_porcentaje||0),0)/prev.length) : 0
-      const progreso_pct = avgPrev ? Math.round(((avgMes - avgPrev) / Math.max(1, avgPrev)) * 100) : (avgMes ? 100 : 0)
-
-      out.push({ curso: String(curso), estudiantes: ids.length, promedio: avgMes, progreso_pct })
-    }
-    return out.sort((a,b)=> b.promedio - a.promedio)
+  // Agrupa por etiqueta "grado°curso" (p. ej. "10°A")
+  const groups = new Map<string, number[]>() // label -> ids
+  for (const e of estudiantes as any[]) {
+    const g = String(e?.grado ?? '').trim()
+    const c = String(e?.curso ?? '').trim()
+    const label = g ? `${g}°${c || ''}` : (c || 'Sin curso')
+    if (!groups.has(label)) groups.set(label, [])
+    groups.get(label)!.push(e.id_usuario)
   }
 
-  // 3) Áreas que necesitan refuerzo (mes actual)
-  async areasQueNecesitanRefuerzo(id_institucion: number) {
-    const { inicio, fin } = rangoMes(new Date())
-    const estudiantes = await Usuario.query().where('rol','estudiante').where('id_institucion', id_institucion)
-    const ids = estudiantes.map(e => e.id_usuario)
-    const ses = await Sesion.query().whereIn('id_usuario', ids).where('inicio_at','>=',inicio as any).where('inicio_at','<',fin as any)
-
-    const promedioGeneral = ses.length ? Math.round(ses.reduce((a,b)=> a + ((b as any).puntaje_porcentaje||0),0)/ses.length) : 0
-
-    const res: Array<{area: Area; estado: 'Crítico'|'Atención'|'Bueno'; porcentaje_bajo: number; debajo_promedio: number}> = []
-
-    for (const area of AREAS) {
-      const porArea = ses.filter(s => (s as any).area === area && (s as any).puntaje_porcentaje != null)
-      if (!porArea.length) {
-        res.push({ area, estado: 'Crítico', porcentaje_bajo: 100, debajo_promedio: 0 })
-        continue
-      }
-      const debajo = porArea.filter(s => ((s as any).puntaje_porcentaje||0) < promedioGeneral).length
-      const pct = Math.round((debajo * 100) / porArea.length)
-      const estado = pct >= 60 ? 'Crítico' : pct >= 30 ? 'Atención' : 'Bueno'
-      res.push({ area, estado, porcentaje_bajo: pct, debajo_promedio: debajo })
-    }
-    return res
+  // Helper de periodo: fin_at dentro del rango, o si está en curso (fin_at NULL) que inicio_at caiga en el rango
+  const inPeriodo = (qb: any, ini: Date, finx: Date) => {
+    qb.where('fin_at', '>=', ini as any).andWhere('fin_at', '<', finx as any)
+      .orWhere((q2: any) => {
+        q2.whereNull('fin_at')
+          .andWhere('inicio_at', '>=', ini as any)
+          .andWhere('inicio_at', '<',  finx as any)
+      })
   }
+
+  // Promedio ponderado por tipo de sesión (simulacro=2, práctica=1)
+  const wavg = (rows: any[]) => {
+    const vals = rows.filter(r => r?.puntaje_porcentaje != null)
+    if (!vals.length) return { avg: 0, n: 0 }
+    let sum = 0, wsum = 0
+    for (const s of vals) {
+      const w = s?.tipo === 'simulacro' ? 2 : 1
+      sum  += Number(s.puntaje_porcentaje || 0) * w
+      wsum += w
+    }
+    return { avg: wsum ? Math.round(sum / wsum) : 0, n: vals.length }
+  }
+
+  const MIN_INTENTOS = 2
+  const items: Array<{ curso: string; estudiantes: number; promedio: number; progreso_pct: number }> = []
+
+  for (const [label, ids] of groups.entries()) {
+    // Mes actual
+    const mes = await Sesion.query()
+      .whereIn('id_usuario', ids)
+      .whereIn('tipo', ['practica', 'simulacro'] as any) // usa tus tipos reales
+      .where(q => inPeriodo(q, inicio, fin))
+
+    // Mes anterior
+    const prev = await Sesion.query()
+      .whereIn('id_usuario', ids)
+      .whereIn('tipo', ['practica', 'simulacro'] as any)
+      .where(q => inPeriodo(q, inicioPrev, finPrev))
+
+    const { avg: avgMes,  n: nMes  } = wavg(mes as any[])
+    const { avg: avgPrev, n: nPrev } = wavg(prev as any[])
+
+    // Progreso como delta de puntos (acotado), solo si hay muestra mínima en ambos meses
+    let progreso_pct = 0
+    if (nMes >= MIN_INTENTOS && nPrev >= MIN_INTENTOS) {
+      const delta = avgMes - avgPrev
+      progreso_pct = Math.max(-100, Math.min(100, delta))
+    }
+
+    items.push({
+      curso: label,
+      estudiantes: ids.length,
+      promedio: avgMes,       // siempre número
+      progreso_pct,           // delta en puntos (tu controller lo puede mapear a 'progreso')
+    })
+  }
+
+  // Ordenar por grado numérico y después por letra
+  const key = (s: string) => {
+    const m = s.match(/^(\d+)[°º]?\s*([A-Za-zÁÉÍÓÚÑ-]+)?/i)
+    return { grado: m ? parseInt(m[1], 10) : 0, seccion: m && m[2] ? m[2] : '' }
+  }
+  items.sort((a, b) => {
+    const A = key(a.curso), B = key(b.curso)
+    return A.grado !== B.grado ? A.grado - B.grado : A.seccion.localeCompare(B.seccion, 'es')
+  })
+
+  return items
+}
+
+
+  // 3) Áreas que necesitan refuerzo (mes actual) – por estudiante (mejor intento del mes)
+async areasQueNecesitanRefuerzo(
+  id_institucion: number,
+  critUmbral = 60,        // % para estado "Crítico"
+  atenUmbral = 30,        // % para estado "Atención"
+  umbralPuntaje = 60,     // puntaje (0-100) bajo el cual un estudiante se considera "bajo"
+  minParticipantes = 5    // si en el área hay menos de esto, no marcamos "Crítico"
+) {
+  const { inicio, fin } = rangoMes(new Date())
+
+  // Normalizador: sin tildes, minúsculas
+  const normalize = (s: string) =>
+    String(s || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase().trim()
+
+  // Mapea nombres libres de DB → tus 5 áreas fijas
+  const mapArea = (raw: string): Area | null => {
+    const n = normalize(raw)
+    if (n.startsWith('matematic')) return 'Matematicas'
+    if (n.startsWith('ingl'))      return 'Ingles'
+    if (n.includes('ciencias'))    return 'Ciencias'
+    if (n.startsWith('social'))    return 'Sociales'
+    if (n.includes('lect') || n.startsWith('lengua')) return 'Lenguaje'
+    return null
+  }
+
+  // Estudiantes de la institución
+  const estudiantes = await Usuario.query()
+    .where('rol', 'estudiante')
+    .where('id_institucion', id_institucion)
+
+  const ids = estudiantes.map(e => e.id_usuario)
+  if (!ids.length) {
+    return { areas: AREAS.map(area => ({ area, estado: 'Atención', porcentaje_bajo: 0, debajo_promedio: 0 })) }
+  }
+
+  // Sesiones del mes: terminadas en el mes o en curso iniciadas en el mes
+  const ses = await Sesion.query()
+    .whereIn('id_usuario', ids)
+    .where(q => {
+      q.where('fin_at', '>=', inicio as any).andWhere('fin_at', '<', fin as any)
+       .orWhere(q2 => {
+         q2.whereNull('fin_at')
+           .andWhere('inicio_at', '>=', inicio as any)
+           .andWhere('inicio_at', '<',  fin   as any)
+       })
+    })
+
+  // Solo con puntaje válido y área reconocible
+  const rows = (ses as any[]).filter(s => s?.puntaje_porcentaje != null && mapArea((s as any).area))
+
+  // Tomar **el MEJOR** intento por (estudiante, área) en el mes
+  // clave = `${areaMapped}#${id_usuario}`
+  const bestByStudentArea = new Map<string, { area: Area; uid: number; puntaje: number }>()
+  for (const s of rows) {
+    const areaMapped = mapArea((s as any).area)!
+    const uid = Number((s as any).id_usuario)
+    const puntaje = Number((s as any).puntaje_porcentaje || 0)
+    const key = `${areaMapped}#${uid}`
+    const cur = bestByStudentArea.get(key)
+    if (!cur || puntaje > cur.puntaje) {
+      bestByStudentArea.set(key, { area: areaMapped, uid, puntaje })
+    }
+  }
+
+  // Agrupar por área (estudiantes únicos)
+  const byArea = new Map<Area, Array<{ uid: number; puntaje: number }>>()
+  for (const v of bestByStudentArea.values()) {
+    if (!byArea.has(v.area)) byArea.set(v.area, [])
+    byArea.get(v.area)!.push({ uid: v.uid, puntaje: v.puntaje })
+  }
+
+  const res: Array<{ area: Area; estado: 'Crítico'|'Atención'|'Bueno'; porcentaje_bajo: number; debajo_promedio: number }> = []
+
+  for (const area of AREAS) {
+    const lista = byArea.get(area) ?? []
+
+    if (!lista.length) {
+      // Sin evidencia en el mes para esta área → no alarmar en rojo
+      res.push({ area, estado: 'Atención', porcentaje_bajo: 0, debajo_promedio: 0 })
+      continue
+    }
+
+    const participantes = lista.length
+    const debajo = lista.filter(x => x.puntaje < umbralPuntaje).length
+    const pct = Math.round((debajo * 100) / participantes)
+
+    // Si hay pocos participantes, no marcamos "Crítico" aunque el % sea alto
+    let estado: 'Crítico'|'Atención'|'Bueno'
+    if (participantes < minParticipantes) {
+      estado = pct >= atenUmbral ? 'Atención' : 'Bueno'
+    } else {
+      estado = pct >= critUmbral ? 'Crítico' : pct >= atenUmbral ? 'Atención' : 'Bueno'
+    }
+
+    res.push({ area, estado, porcentaje_bajo: pct, debajo_promedio: debajo })
+  }
+
+  // Orden de peor a mejor
+  res.sort((a, b) => b.porcentaje_bajo - a.porcentaje_bajo)
+  return { areas: res }
+}
+
 
   // 4) Estudiantes que requieren atención (top N más bajos este mes)
   async estudiantesQueRequierenAtencion(id_institucion: number, limite = 10) {
