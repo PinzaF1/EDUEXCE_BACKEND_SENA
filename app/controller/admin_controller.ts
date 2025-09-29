@@ -195,22 +195,33 @@ public async webSeguimientoCursos({ request, response }: HttpContext) {
 
 
 // ====== WEB: Áreas que necesitan refuerzo ======
+// AdminController.ts
 public async webAreasRefuerzo({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
   const q = request.qs() as any
+
   const crit = Number(q.umbral ?? 60)              // % crítico
   const aten = Number(q.umbral_atencion ?? 30)     // % atención
   const up   = Number(q.umbral_puntaje ?? 60)      // puntaje mínimo
+  const min  = Number(q.min_participantes ?? 5)    // mínimo para permitir "Crítico"
 
+  // OJO: usa seguimientoService (no dashboardService)
   const { areas } = await (seguimientoService as any).areasQueNecesitanRefuerzo(
-    Number(auth.id_institucion),
-    crit,
-    aten,
-    up
+    Number(auth.id_institucion), crit, aten, up, min
   )
 
-  return response.ok({ areas })
+  // Compatibilidad FE: exponemos porcentaje_bajo y también porcentaje
+  const payload = areas.map((a: any) => ({
+    area: a.area,
+    estado: a.estado,
+    porcentaje_bajo: a.porcentaje_bajo,
+    porcentaje: a.porcentaje_bajo,   // <-- alias para FE que lea "porcentaje"
+    debajo_promedio: a.debajo_promedio,
+  }))
+
+  return response.ok({ areas: payload })
 }
+
 
 
 // ====== WEB: Estudiantes que requieren atención ======
