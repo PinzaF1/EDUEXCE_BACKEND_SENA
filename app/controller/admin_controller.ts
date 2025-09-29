@@ -200,26 +200,47 @@ public async webAreasRefuerzo({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
   const q = request.qs() as any
 
-  const crit = Number(q.umbral ?? 60)              // % crítico
-  const aten = Number(q.umbral_atencion ?? 30)     // % atención
-  const up   = Number(q.umbral_puntaje ?? 60)      // puntaje mínimo
-  const min  = Number(q.min_participantes ?? 5)    // mínimo para permitir "Crítico"
+  const crit = Number(q.umbral ?? 60)
+  const aten = Number(q.umbral_atencion ?? 30)
+  const up   = Number(q.umbral_puntaje ?? 60)
+  const min  = Number(q.min_participantes ?? 5)
 
-  // OJO: usa seguimientoService (no dashboardService)
+  // usa el service correcto
   const { areas } = await (seguimientoService as any).areasQueNecesitanRefuerzo(
     Number(auth.id_institucion), crit, aten, up, min
   )
 
-  // Compatibilidad FE: exponemos porcentaje_bajo y también porcentaje
-  const payload = areas.map((a: any) => ({
-    area: a.area,
+  // Mapea nombres a EXACTOS del frontend
+  const display: Record<string, string> = {
+    Matematicas: 'Matematicas',
+    Ingles: 'Ingles',
+    Lenguaje: 'Lectera Critica',       // <- así lo pinta tu FE
+    Ciencias: 'Ciencias Naturales',
+    Sociales: 'Sociales y Ciudadanas',
+  }
+
+  // Orden opcional para que salgan como en tu UI
+  const ORDER = [
+    'Ciencias Naturales',
+    'Ingles',
+    'Lectera Critica',
+    'Matematicas',
+    'Sociales y Ciudadanas',
+  ]
+
+  const items = (areas as any[]).map(a => ({
+    // devolvemos "area" con la etiqueta EXACTA que espera tu FE
+    area: display[a.area] ?? a.area,
     estado: a.estado,
-    porcentaje_bajo: a.porcentaje_bajo,
-    porcentaje: a.porcentaje_bajo,   // <-- alias para FE que lea "porcentaje"
-    debajo_promedio: a.debajo_promedio,
+    porcentaje_bajo: Number(a.porcentaje_bajo ?? 0),
+    porcentaje: Number(a.porcentaje_bajo ?? 0),     // alias para FE
+    debajo_promedio: Number(a.debajo_promedio ?? 0),
   }))
 
-  return response.ok({ areas: payload })
+  // ordenar como en tu tabla/barras
+  items.sort((x, y) => ORDER.indexOf(x.area) - ORDER.indexOf(y.area))
+
+  return response.ok({ areas: items })
 }
 
 
