@@ -15,9 +15,8 @@ Route.post('auth/recovery/admin/restablecer', (ctx) => new AuthController().rest
 Route.post('auth/recovery/estudiante/enviar', (ctx) => new AuthController().enviarRecoveryEstudiante(ctx))
 Route.post('auth/recovery/estudiante/restablecer', (ctx) => new AuthController().restablecerEstudiante(ctx))
 
-// ADMIN (web)
+// ADMIN web
 Route.get('admin/seguimiento', (ctx) => new AdminController().seguimiento(ctx)).use(onlyRol({ rol: 'administrador' }))
-
 Route.get('admin/estudiantes', (ctx) => new AdminController().listarEstudiantes(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/estudiantes', (ctx) => new AdminController().crearEstudiante(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/estudiantes/importar', (ctx) => new AdminController().importarEstudiantes(ctx)).use(onlyRol({ rol: 'administrador' }))
