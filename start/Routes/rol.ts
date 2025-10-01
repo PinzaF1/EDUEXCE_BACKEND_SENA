@@ -46,6 +46,11 @@ Route.post('sesion/parada', (ctx) => new MovilController().crearParada(ctx)).use
 Route.post('sesion/cerrar', (ctx) => new MovilController().cerrarSesion(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/simulacro', (ctx) => new MovilController().crearSimulacro(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
+// ISLA DEL CONOCIMIENTO 
+Route.post('movil/isla/simulacro', (ctx) => new MovilController().islaSimulacroIniciar(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/isla/simulacro/cerrar', (ctx) => new MovilController().islaSimulacroCerrar(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/isla/simulacro/:id_sesion/resumen', (ctx) => new MovilController().islaSimulacroResumen(ctx)).use(onlyRol({ rol: 'estudiante' }))
+
 // PROGRESO MOVIL
 Route.get('movil/progreso/resumen',   (ctx) => new MovilController().progresoResumen(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/materias',  (ctx) => new MovilController().progresoPorMaterias(ctx)).use(onlyRol({ rol: 'estudiante' }))
@@ -61,9 +66,12 @@ Route.get('web/seguimiento/areas/activos',      (ctx) => new AdminController().w
 Route.get('web/seguimiento/series/progreso-por-area', (ctx) => new AdminController().webSerieProgresoPorArea(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/rendimiento-por-area',     (ctx) => new AdminController().webRendimientoPorArea(ctx)).use(onlyRol({ rol: 'administrador' }))
 
-// RANKING / LOGROS
+// RANKING Y LOGROS
 Route.get('movil/ranking', (ctx) => new MovilController().ranking(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/logros', (ctx) => new MovilController().misLogros(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/logros/otorgar-area', (ctx) => new MovilController().otorgarInsigniaArea(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/logros/todos', (ctx) => new MovilController().logrosTodos(ctx)).use(onlyRol({ rol: 'estudiante' }))
+
 
 // Retos 1 vs 1
 Route.post('movil/retos', (ctx) => new MovilController().crearReto(ctx)).use(onlyRol({ rol: 'estudiante' }))

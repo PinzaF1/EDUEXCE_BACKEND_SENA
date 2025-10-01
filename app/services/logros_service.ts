@@ -1,38 +1,70 @@
-import Sesion from '../models/sesione.js'
-import Reto from '../models/reto.js' // asumiendo que ya tienes este modelo
+// app/services/logros_service.ts
+import ProgresoNivel from '../models/progreso_nivel.js'
 
-type Badge = { clave: string; nombre: string; descripcion: string; obtenido: boolean }
+type Area = 'Matematicas'|'Lenguaje'|'Ciencias'|'Sociales'|'Ingles'
+const AREAS: Area[] = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles']
 
 export default class LogrosService {
-  // Genera colección de insignias derivando de sesiones y retos
-  async obtenerInsignias(id_usuario: number) {
-    const badges: Badge[] = [
-      { clave: 'isla_matematicas', nombre: 'Isla Matemáticas', descripcion: 'Completó todos los subtemas de Matemáticas', obtenido: false },
-      { clave: 'isla_lenguaje', nombre: 'Isla Lenguaje', descripcion: 'Completó todos los subtemas de Lenguaje', obtenido: false },
-      { clave: 'isla_ciencias', nombre: 'Isla Ciencias', descripcion: 'Completó todos los subtemas de Ciencias', obtenido: false },
-      { clave: 'isla_sociales', nombre: 'Isla Sociales', descripcion: 'Completó todos los subtemas de Sociales', obtenido: false },
-      { clave: 'isla_ingles', nombre: 'Isla Inglés', descripcion: 'Completó todos los subtemas de Inglés', obtenido: false },
-      { clave: 'guerrero', nombre: 'Guerrero', descripcion: 'Ganó un reto 1 vs 1', obtenido: false },
-    ]
+  /** HU-03: verificar si TODAS las paradas del área están superadas */
+  public async asignarInsigniaAreaSiCorresponde(id_usuario: number, area: Area) {
+    const filas = await ProgresoNivel
+      .query()
+      .where('id_usuario', id_usuario)
+      .where('area', area)
+      .select(['estado'])
 
-    // Heurística simple: si tiene simulacro (tipo=simulacro) por área => marcamos isla completada
-    const ses = await Sesion.query().where('id_usuario', id_usuario)
-    const tiene = (area: string) => ses.some(s => (s as any).tipo === 'simulacro' && (s as any).area === area)
-
-    if (tiene('Matematicas')) badges.find(b=>b.clave==='isla_matematicas')!.obtenido = true
-    if (tiene('Lenguaje')) badges.find(b=>b.clave==='isla_lenguaje')!.obtenido = true
-    if (tiene('Ciencias')) badges.find(b=>b.clave==='isla_ciencias')!.obtenido = true
-    if (tiene('Sociales')) badges.find(b=>b.clave==='isla_sociales')!.obtenido = true
-    if (tiene('Ingles')) badges.find(b=>b.clave==='isla_ingles')!.obtenido = true
-
-    // Guerrero: si figura como ganador en algún reto
-    try {
-      const retoGanado = await Reto.query().where('ganador_id', id_usuario).limit(1)
-      if (retoGanado.length) badges.find(b=>b.clave==='guerrero')!.obtenido = true
-    } catch {
-      // si no tienes tabla retos aún, ignoramos
+    if (!filas.length) {
+      return { otorgada: false, area, motivo: 'No hay paradas registradas en esta área' }
     }
 
-    return badges
+    const todasSuperadas = (filas as any[]).every(f => String(f.estado) === 'superado')
+
+    if (todasSuperadas) {
+      const nombreArea = area === 'Matematicas' ? 'Matemáticas' : area
+      return {
+        otorgada: true,
+        area,
+        nombre: `Isla completa: ${nombreArea}`,
+        descripcion: `Completaste todas las paradas del área de ${nombreArea}.`
+      }
+    }
+
+    return { otorgada: false, area, motivo: 'Aún no se han superado todas las paradas del área' }
+  }
+
+  /**
+   * HU-04: listar mis insignias (obtenidas y pendientes) SIN persistencia.
+   * Regresa 5 posibles “Isla completa: {Área}”.
+   */
+  public async listarInsigniasCompletas(id_usuario: number) {
+    const obtenidas: Array<{codigo: string; nombre: string; descripcion: string; area: Area}> = []
+    const pendientes: Array<{codigo: string; nombre: string; descripcion: string; area: Area}> = []
+
+    for (const area of AREAS) {
+      const check = await this.asignarInsigniaAreaSiCorresponde(id_usuario, area)
+      const nombreArea = area === 'Matematicas' ? 'Matemáticas' : area
+      const base = {
+        codigo: `ISLA_COMPLETA_${area.toUpperCase()}`,
+        nombre: `Isla completa: ${nombreArea}`,
+        descripcion: `Completaste todas las paradas del área de ${nombreArea}.`,
+        area,
+      }
+      if (check.otorgada) {
+        obtenidas.push(base)
+      } else {
+        pendientes.push(base)
+      }
+    }
+
+    return { obtenidas, pendientes }
+  }
+
+  /**
+   * Compatibilidad con tu endpoint previo `misLogros`:
+   * si lo estás llamando desde el controlador, devolvemos el mismo formato
+   * (obtenidas/pendientes) calculado.
+   */
+  public async misLogros(id_usuario: number) {
+    return this.listarInsigniasCompletas(id_usuario)
   }
 }

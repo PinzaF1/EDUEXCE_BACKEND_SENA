@@ -14,9 +14,9 @@ export default class SesionesService {
   /** Forzar tabla calificada para el detalle (sin tocar el modelo) */
   private ensureDetalleTable() {
     const expected = 'public.sesiones_detalles'
-    // @ts-ignore
+   
     if ((SesionDetalle as any).table !== expected) {
-      // @ts-ignore
+      
       (SesionDetalle as any).table = expected
     }
   }
@@ -572,4 +572,304 @@ export default class SesionesService {
 
     return { id_sesion, puntajes_por_area: puntajes, puntaje_general: puntajeGeneral, detalle }
   }
+
+  // === Helper privado: puntaje global ICFES (ponderado 3-3-3-3-1 y *5) ===
+private icfesGlobal(porArea: Record<string, number>) {
+  // aceptamos claves con/ sin tilde por si vienen del banco
+  const M = Number(porArea.Matematicas ?? porArea['Matemáticas'] ?? 0)
+  const L = Number(porArea.Lenguaje ?? porArea['Lectura Crítica'] ?? 0)
+  const C = Number(porArea.Ciencias ?? porArea['Ciencias Naturales'] ?? 0)
+  const S = Number(porArea.Sociales ?? porArea['Sociales y Ciudadanas'] ?? 0)
+  const I = Number(porArea.Ingles ?? porArea['Inglés'] ?? porArea['Ingles'] ?? 0)
+
+  const sumaPonderada = (M * 3) + (L * 3) + (C * 3) + (S * 3) + (I * 1)
+  const promedioPonderado = sumaPonderada / 13
+  const globalIcfes = Math.round(promedioPonderado * 5)
+  return globalIcfes
+}
+
+// ========= NUEVO: SIMULACRO MIXTO (25 = 5 por cada área) =========
+public async crearSimulacroMixto(d: { id_usuario: number; modalidad: 'facil' | 'dificil' }) {
+  this.ensureDetalleTable()
+
+  type AreaKey = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
+  const AREAS: AreaKey[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']
+
+  const stripAccents = (s: string) =>
+    String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+  // normaliza cadenas de área del banco a nuestras claves
+  const toAreaKeyOrNull = (a: string): AreaKey | null => {
+    const s = stripAccents(a)
+    if (s.startsWith('matemat')) return 'Matematicas'
+    if (s.startsWith('lengua') || s.includes('lectura')) return 'Lenguaje'
+    if (s.startsWith('ciencias nat') || s === 'naturales' || s.startsWith('ciencia')) return 'Ciencias'
+    if (s.startsWith('ciencias soc') || s.startsWith('social')) return 'Sociales'
+    if (s.startsWith('ingles') || s === 'english') return 'Ingles'
+    return null
+  }
+
+  // parámetros por modalidad
+  const timeLimit = d.modalidad === 'dificil' ? 60 : null
+
+  const preguntas: any[] = []
+  const usados = new Set<number>()
+
+  // helper: trae N preguntas del banco para un área, evitando duplicados
+  const traerDelBanco = async (areaKey: AreaKey, cuantos: number) => {
+    let rows: any[] = []
+    try {
+      rows = await BancoPregunta.query()
+        .whereRaw('unaccent(lower(area)) = unaccent(lower(?))', [areaKey])
+        .if(usados.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(usados)))
+        .orderByRaw('random()')
+        .limit(cuantos)
+    } catch {
+      rows = await BancoPregunta.query()
+        .whereILike('area', `%${areaKey}%`)
+        .if(usados.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(usados)))
+        .orderByRaw('random()')
+        .limit(cuantos)
+    }
+    return rows
+      .map((b: any) => ({
+        id_pregunta: Number(b.id_pregunta),
+        area: toAreaKeyOrNull(String(b.area)) ?? areaKey, // normalizamos
+        subtema: b.subtema,
+        dificultad: b.dificultad ?? null,
+        pregunta: b.pregunta,
+        opciones: b.opciones,
+        time_limit_seconds: timeLimit,
+      }))
+      .filter((p) => {
+        if (!p.id_pregunta || usados.has(p.id_pregunta)) return false
+        usados.add(p.id_pregunta)
+        return true
+      })
+  }
+
+  // 1) Intento con IA (por área 5 c/u). NO filtramos por dificultad del banco.
+  // Si IA falla o trae menos, completamos con banco.
+  for (const area of AREAS) {
+    const lote: any[] = []
+    try {
+      const pack = await this.ia.generarPreguntas({
+        area,
+        cantidad: 6, // pedimos 6 para amortiguar duplicados
+        // dificultad NO se usa como filtro de banco; la IA puede devolver cualquiera
+        id_institucion: null,
+      } as any)
+
+      for (const p of (pack || [])) {
+        const idp = Number((p as any).id_pregunta)
+        if (!idp || usados.has(idp)) continue
+        usados.add(idp)
+        lote.push({
+          id_pregunta: idp,
+          area: toAreaKeyOrNull(String(p.area)) ?? area,
+          subtema: p.subtema,
+          dificultad: p.dificultad ?? null,
+          pregunta: p.pregunta,
+          opciones: p.opciones,
+          time_limit_seconds: timeLimit,
+        })
+        if (lote.length >= 5) break
+      }
+    } catch { /* silent */ }
+
+    if (lote.length < 5) {
+      const faltan = 5 - lote.length
+      const extra = await traerDelBanco(area, faltan)
+      lote.push(...extra)
+    }
+
+    if (lote.length < 5) {
+      // último intento: banco sin igualdad estricta (solo por si hay áreas con tilde)
+      let extra2: any[] = []
+      try {
+        extra2 = await BancoPregunta.query()
+          .whereILike('area', `%${area}%`)
+          .if(usados.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(usados)))
+          .orderByRaw('random()')
+          .limit(5 - lote.length)
+      } catch { /* ignore */ }
+
+      for (const b of extra2) {
+        const idp = Number((b as any).id_pregunta)
+        if (!idp || usados.has(idp)) continue
+        usados.add(idp)
+        lote.push({
+          id_pregunta: idp,
+          area: toAreaKeyOrNull(String((b as any).area)) ?? area,
+          subtema: (b as any).subtema,
+          dificultad: (b as any).dificultad ?? null,
+          pregunta: (b as any).pregunta,
+          opciones: (b as any).opciones,
+          time_limit_seconds: timeLimit,
+        })
+        if (lote.length >= 5) break
+      }
+    }
+
+    preguntas.push(...lote.slice(0, 5))
+  }
+
+  // validación final
+  if (preguntas.length !== 25) {
+    throw new Error(`Se esperaban 25 preguntas (5 por área), se obtuvieron ${preguntas.length}`)
+  }
+
+  // crear sesión
+  const sesion = await Sesion.create({
+    id_usuario: d.id_usuario,
+    tipo: 'simulacro',
+    modo: 'estandar',
+    area: null as any, // mixto
+    usa_estilo_kolb: false,
+    inicio_at: DateTime.now(),
+    total_preguntas: preguntas.length,
+    correctas: 0,
+    tiempo_por_pregunta: timeLimit ?? null,
+  } as any)
+
+  const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
+  const rows = preguntas.map((p: any, i: number) => ({
+    id_sesion,
+    id_pregunta: p.id_pregunta ?? null,
+    orden: i + 1,
+    tiempo_asignado_seg: timeLimit,
+  }))
+  await SesionDetalle.createMany(rows as any)
+
+  return {
+    sesion: { id_sesion, modalidad: d.modalidad, total: preguntas.length },
+    preguntas: preguntas.map((p: any) => ({
+      id_pregunta: String(p.id_pregunta),
+      area: p.area,
+      subtema: p.subtema,
+      dificultad: p.dificultad,
+      enunciado: p.pregunta,
+      opciones: p.opciones,
+      time_limit_seconds: p.time_limit_seconds,
+    })),
+  }
+}
+
+// ===== NUEVO: cerrar simulacro mixto (áreas + global + ICFES + tiempo) =====
+public async cerrarSimulacroMixto(d: {
+  id_sesion: number
+  respuestas: Array<{ orden: number; opcion: string; tiempo_empleado_seg?: number }>
+}) {
+  this.ensureDetalleTable()
+
+  // 1) Reutilizamos tu cierre estándar (marca correctas, puntaje, fin_at)
+  const base = await this.cerrarSesion(d)
+
+  // 2) Calculamos por área y tiempos
+  const ses = await Sesion.findOrFail(d.id_sesion)
+  const detalles = await SesionDetalle.query()
+    .where('id_sesion', d.id_sesion)
+    .orderBy('orden', 'asc')
+
+  const ids = detalles.map((x: any) => Number(x.id_pregunta)).filter(Boolean)
+  const banco = ids.length ? await BancoPregunta.query().whereIn('id_pregunta', ids) : []
+
+  const areaDe = new Map<number, string>()
+  for (const b of banco) {
+    areaDe.set(Number((b as any).id_pregunta), String((b as any).area))
+  }
+
+  const porArea: Record<string, { total: number; ok: number }> = {}
+  for (const det of detalles) {
+    const idp = Number((det as any).id_pregunta)
+    const area = areaDe.get(idp) || 'Desconocida'
+    if (!porArea[area]) porArea[area] = { total: 0, ok: 0 }
+    porArea[area].total += 1
+    if ((det as any).es_correcta === true) porArea[area].ok += 1
+  }
+
+  const puntajes_por_area: Record<string, number> = {}
+  let totalCorrectas = 0
+  let totalPreguntas = 0
+  for (const [area, agg] of Object.entries(porArea)) {
+    puntajes_por_area[area] = agg.total > 0 ? Math.round((agg.ok / agg.total) * 100) : 0
+    totalCorrectas += agg.ok
+    totalPreguntas += agg.total
+  }
+  const puntaje_general = totalPreguntas > 0 ? Math.round((totalCorrectas / totalPreguntas) * 100) : 0
+
+  // === Puntaje global ICFES (ponderado)
+  const puntaje_icfes_global = this.icfesGlobal(puntajes_por_area)
+
+  // Duración total
+  const fin = (ses as any).fin_at ?? DateTime.now()
+  const inicio = (ses as any).inicio_at
+  const finMs = typeof (fin as any)?.toMillis === 'function' ? (fin as any).toMillis() : +new Date(fin)
+  const iniMs = typeof (inicio as any)?.toMillis === 'function' ? (inicio as any).toMillis() : +new Date(inicio)
+  const duracion_segundos = Math.max(0, Math.round((finMs - iniMs) / 1000))
+  ;(ses as any).duracion_segundos = duracion_segundos
+  await ses.save()
+
+  const tiempo_esperado_seg = 25 * 60 // 25 minutos
+
+  return {
+    id_sesion: d.id_sesion,
+    resultado_base: base, // { aprueba, correctas, puntaje }
+    puntajes_por_area,
+    puntaje_general,
+    puntaje_icfes_global,
+    tiempo: {
+      usado_seg: Math.round(duracion_segundos),
+      esperado_seg: tiempo_esperado_seg,
+      diferencia_seg: Math.round(duracion_segundos - tiempo_esperado_seg),
+    },
+  }
+}
+
+// ===== NUEVO: reconsultar resumen del simulacro (incluye ICFES) =====
+public async resumenResultadoSimulacro(id_sesion: number) {
+  const ses = await Sesion.find(id_sesion)
+  if (!ses) return null
+
+  const detalles = await SesionDetalle.query().where('id_sesion', id_sesion)
+  const ids = detalles.map((x: any) => Number(x.id_pregunta)).filter(Boolean)
+  const banco = ids.length ? await BancoPregunta.query().whereIn('id_pregunta', ids) : []
+
+  const areaDe = new Map<number, string>()
+  for (const b of banco) areaDe.set(Number((b as any).id_pregunta), String((b as any).area))
+
+  const porArea: Record<string, { total: number; ok: number }> = {}
+  for (const det of detalles) {
+    const idp = Number((det as any).id_pregunta)
+    const area = areaDe.get(idp) || 'Desconocida'
+    if (!porArea[area]) porArea[area] = { total: 0, ok: 0 }
+    porArea[area].total += 1
+    if ((det as any).es_correcta === true) porArea[area].ok += 1
+  }
+
+  const puntajes_por_area: Record<string, number> = {}
+  let totalCorrectas = 0
+  let totalPreguntas = 0
+  for (const [area, agg] of Object.entries(porArea)) {
+    puntajes_por_area[area] = agg.total > 0 ? Math.round((agg.ok / agg.total) * 100) : 0
+    totalCorrectas += agg.ok
+    totalPreguntas += agg.total
+  }
+  const puntaje_general = totalPreguntas > 0 ? Math.round((totalCorrectas / totalPreguntas) * 100) : 0
+
+  // === Puntaje global ICFES (ponderado)
+  const puntaje_icfes_global = this.icfesGlobal(puntajes_por_area)
+
+  return {
+    id_sesion,
+    puntajes_por_area,
+    puntaje_general,
+    puntaje_icfes_global,
+    correctas: totalCorrectas,
+    total_preguntas: totalPreguntas,
+    duracion_segundos: (ses as any).duracion_segundos ?? null,
+  }
+}
+
+
 }

@@ -121,6 +121,40 @@ class MovilController {
     }
   }
 
+// ===== Isla del Conocimiento: iniciar simulacro mixto (HU-01/02/03) =====
+public async islaSimulacroIniciar({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const { modalidad } = request.only(['modalidad']) as any
+  const mod = String(modalidad || 'facil').toLowerCase() === 'dificil' ? 'dificil' : 'facil'
+
+  const data = await (sesionesService as any).crearSimulacroMixto({
+    id_usuario: Number(auth.id_usuario),
+    modalidad: mod,
+  })
+
+  return response.created(data)
+}
+
+// ===== Isla del Conocimiento: cerrar simulacro (HU-04/05) =====
+public async islaSimulacroCerrar({ request, response }: HttpContext) {
+  const body = request.only(['id_sesion', 'respuestas']) as any
+  const id_sesion = Number(body.id_sesion)
+  const respuestas = Array.isArray(body.respuestas) ? body.respuestas : []
+
+  const data = await (sesionesService as any).cerrarSimulacroMixto({ id_sesion, respuestas })
+  return response.ok(data)
+}
+
+// ===== Isla del Conocimiento: ver resumen/resultado guardado =====
+public async islaSimulacroResumen({ request, response }: HttpContext) {
+  const id_sesion = Number(request.param('id_sesion'))
+  const data = await (sesionesService as any).resumenResultadoSimulacro(id_sesion)
+  if (!data) return response.notFound({ error: 'Simulacro no encontrado' })
+  return response.ok(data)
+}
+
+
+
   // PROGRESO
 public async progresoResumen({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
@@ -152,17 +186,46 @@ public async progresoHistorialDetalle({ request, response }: HttpContext) {
 }
 
 
-  // ============ RANKING / LOGROS ============
-  public async ranking({ response }: HttpContext) {
-    const data = await (rankingService as any).top5()
-    return response.ok(data)
-  }
+// ============ RANKING / LOGROS ============
+public async ranking({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await rankingService.rankingInstitucion(
+    Number(auth.id_institucion),
+    Number(auth.id_usuario)
+  )
+  return response.ok(data)
+}
 
-  public async misLogros({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const data = await (logrosService as any).misLogros(auth.id_usuario)
-    return response.ok(data)
+/** Compatibilidad con tu endpoint existente (HU-04 si lo llamabas así) */
+public async misLogros({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await logrosService.misLogros(Number(auth.id_usuario))
+  return response.ok(data)
+}
+
+/** HU-03: verificar/otorgar insignia al completar un área */
+public async otorgarInsigniaArea({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const { area } = request.only(['area']) as any
+  const okAreas = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles']
+  if (!okAreas.includes(String(area))) {
+    return response.badRequest({ error: 'Área inválida' })
   }
+  const res = await logrosService.asignarInsigniaAreaSiCorresponde(
+    Number(auth.id_usuario),
+    String(area) as any
+  )
+  return response.ok(res)
+}
+
+/** HU-04: todas mis insignias (obtenidas y pendientes) */
+public async logrosTodos({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await logrosService.listarInsigniasCompletas(Number(auth.id_usuario))
+  return response.ok(data)
+}
+
+
 
   // ============ RETOS ============
   public async crearReto({ request, response }: HttpContext) {
