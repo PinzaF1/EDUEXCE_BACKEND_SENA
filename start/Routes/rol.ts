@@ -71,7 +71,6 @@ Route.get('movil/logros', (ctx) => new MovilController().misLogros(ctx)).use(onl
 Route.post('movil/logros/otorgar-area', (ctx) => new MovilController().otorgarInsigniaArea(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/logros/todos', (ctx) => new MovilController().logrosTodos(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
-
 // Retos 1 vs 1
 Route.post('movil/retos', (ctx) => new MovilController().crearReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/retos/:id_reto/aceptar', (ctx) => new MovilController().aceptarReto(ctx)).use(onlyRol({ rol: 'estudiante' }))

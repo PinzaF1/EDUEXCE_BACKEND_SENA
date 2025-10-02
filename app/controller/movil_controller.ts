@@ -225,36 +225,67 @@ public async logrosTodos({ request, response }: HttpContext) {
   return response.ok(data)
 }
 
-
-
-  // ============ RETOS ============
-  public async crearReto({ request, response }: HttpContext) {
+// ============ RETOS 1v1 ============
+public async crearReto({ request, response }: HttpContext) {
+  try {
     const auth = (request as any).authUsuario
-    const datos = request.all() as any
-    const data = await (retosService as any).crearReto(auth.id_usuario, datos)
+    const { cantidad, area } = request.only(['cantidad', 'area']) as any
+    if (!area) return response.badRequest({ message: 'El campo "area" es obligatorio.' })
+
+    const data = await retosService.crearReto({
+      id_institucion: Number(auth.id_institucion),
+      creado_por: Number(auth.id_usuario),
+      cantidad: Number(cantidad ?? 25),
+      area: String(area) as any,
+    })
     return response.created(data)
+  } catch (err: any) {
+    return response.internalServerError({ message: err?.message || 'Error al crear el reto' })
   }
+}
 
-  public async aceptarReto({ request, response }: HttpContext) {
+/** HU-01: Aceptar reto (:id_reto) */
+public async aceptarReto({ request, response }: HttpContext) {
+  try {
     const auth = (request as any).authUsuario
     const idReto = Number(request.param('id_reto'))
-    const data = await (retosService as any).aceptarReto(auth.id_usuario, idReto)
-    return response.ok(data)
-  }
+    if (!idReto) return response.badRequest({ message: 'id_reto inválido' })
 
-  public async responderRonda({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const datos = request.all() as any
-    const data = await (retosService as any).responderRonda(auth.id_usuario, datos)
+    const data = await retosService.aceptarReto(idReto, Number(auth.id_usuario))
     return response.ok(data)
+  } catch (err: any) {
+    return response.internalServerError({ message: err?.message || 'Error al aceptar el reto' })
   }
+}
 
-  public async estadoReto({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
+/** HU-02: Registrar respuestas cronometradas */
+public async responderRonda({ request, response }: HttpContext) {
+  try {
+    const { id_sesion, respuestas } = request.only(['id_sesion', 'respuestas']) as any
+    if (!id_sesion) return response.badRequest({ message: 'El campo "id_sesion" es obligatorio.' })
+
+    const data = await retosService.responderRonda({
+      id_sesion: Number(id_sesion),
+      respuestas: Array.isArray(respuestas) ? respuestas : [],
+    })
+    return response.ok(data)
+  } catch (err: any) {
+    return response.internalServerError({ message: err?.message || 'Error al registrar la ronda' })
+  }
+}
+
+/** HU-03: Estado del reto + ganador */
+public async estadoReto({ request, response }: HttpContext) {
+  try {
     const idReto = Number(request.param('id_reto'))
-    const data = await (retosService as any).estadoReto(auth.id_usuario, idReto)
+    if (!idReto) return response.badRequest({ message: 'id_reto inválido' })
+    const data = await retosService.estadoReto(idReto)
     return response.ok(data)
+  } catch (err: any) {
+    return response.internalServerError({ message: err?.message || 'Error al consultar el estado del reto' })
   }
+}
+
 
   // ============ QUIZ INICIAL (DIAGNÓSTICO) ============
   public async quizInicialIniciar({ request, response }: HttpContext) {
