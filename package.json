@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node ace build --ignore-ts-errors",
     "start": "node build/bin/server.js",
-    "postbuild": "copy .env build\\.env || echo No local .env to copy",
+    "postbuild": "sh -c 'cp .env build/.env 2>/dev/null || echo No local .env to copy'",
     "dev": "node ace serve --hmr",
     "test": "node ace test",
     "lint": "eslint .",

@@ -1,6 +1,6 @@
-// app/services/registro_service.ts
 import bcrypt from 'bcrypt'
 import jwt, { Secret } from 'jsonwebtoken'
+import { DateTime } from 'luxon'
 import Institucion from '../models/institucione.js'
 
 const SECRET: Secret = (process.env.JWT_SECRET ?? 'secret123') as Secret
@@ -19,22 +19,25 @@ type RegistroDto = {
   confirm_password: string
 }
 
+const normalizeEmail = (s: string) => String(s || '').trim().toLowerCase()
+const trim = (s: any) => String(s ?? '').trim()
+
 export default class RegistroService {
   // EP-01: Registro y validación de institución
   async registrarInstitucion(d: RegistroDto) {
-    // Normalizar/trim
-    const nombre_institucion = d.nombre_institucion?.trim()
-    const codigo_dane = d.codigo_dane?.trim()
-    const ciudad = d.ciudad?.trim()
-    const departamento = d.departamento?.trim()
-    const direccion = d.direccion?.trim()
-    const telefono = d.telefono?.trim()
-    const jornada = d.jornada?.trim()
-    const correo = d.correo?.trim().toLowerCase()
-    const password = String(d.password ?? '')
-    const confirm = String(d.confirm_password ?? '')
+    // Normalizar
+    const nombre_institucion = trim(d.nombre_institucion)
+    const codigo_dane       = trim(d.codigo_dane)
+    const ciudad            = trim(d.ciudad)
+    const departamento      = trim(d.departamento)
+    const direccion         = trim(d.direccion)
+    const telefono          = trim(d.telefono)
+    const jornada           = trim(d.jornada)
+    const correo            = normalizeEmail(d.correo)
+    const password          = String(d.password ?? '')
+    const confirm           = String(d.confirm_password ?? '')
 
-    // Validaciones de campos obligatorios
+    // Validaciones de obligatorios (EP-01 HU-01)
     const faltantes: string[] = []
     if (!nombre_institucion) faltantes.push('nombre_institucion')
     if (!codigo_dane)       faltantes.push('codigo_dane')
@@ -54,16 +57,17 @@ export default class RegistroService {
     }
 
     // Unicidad
-    const existeCorreo = await Institucion.findBy('correo', correo)
-    if (existeCorreo) throw new Error('El correo institucional ya está registrado')
-
-    const existeDane = await Institucion.findBy('codigo_dane', codigo_dane)
-    if (existeDane) throw new Error('El código DANE ya está registrado')
+    if (await Institucion.findBy('correo', correo)) {
+      throw new Error('El correo institucional ya está registrado')
+    }
+    if (await Institucion.findBy('codigo_dane', codigo_dane)) {
+      throw new Error('El código DANE ya está registrado')
+    }
 
     // Hash de contraseña
     const hash = await bcrypt.hash(password, 10)
 
-    // Crear institución
+    // Crear institución con defaults para evitar NULL innecesarios
     const inst = await Institucion.create({
       nombre_institucion,
       codigo_dane,
@@ -73,34 +77,39 @@ export default class RegistroService {
       telefono,
       jornada,
       correo,
-      password: hash,        // tu migración guarda "password" en instituciones
+      password: hash,          // el modelo Institucion usa 'password'
+      logo_url: (null as any), // explícito para que no quede undefined
+      is_activo: true as any,  // en tu modelo la columna es is_activo (boolean)
     } as any)
 
-    // Autologin del administrador (EP-01 → permitir iniciar sesión)
+    // Autologin post-registro (EP-01 HU-02)
     const token = jwt.sign(
-      { rol: 'administrador', id_institucion: inst.id_institucion },
+      { rol: 'administrador', id_institucion: (inst as any).id_institucion },
       SECRET,
       { expiresIn: EXPIRES_IN }
     )
 
+    // NUNCA devolver password ni hash
     return {
-    institucion: {
-    id_institucion: inst.id_institucion,
-    nombre_institucion: inst.nombre_institucion,
-    codigo_dane: inst.codigo_dane,
-    ciudad: inst.ciudad,
-    departamento: inst.departamento,
-    direccion: inst.direccion,
-    telefono: inst.telefono,
-    jornada: inst.jornada,
-    correo: inst.correo,
-    password: inst.password,
-    logo_url: inst.logo_url,
-    is_active: inst.is_active,
-    created_at: (inst as any).created_at,
-    updated_at: (inst as any).updated_at,
-  },
-  token,
-}
+      institucion: {
+        id_institucion: (inst as any).id_institucion,
+        nombre_institucion: (inst as any).nombre_institucion,
+        codigo_dane: (inst as any).codigo_dane,
+        ciudad: (inst as any).ciudad,
+        departamento: (inst as any).departamento,
+        direccion: (inst as any).direccion,
+        telefono: (inst as any).telefono,
+        jornada: (inst as any).jornada,
+        correo: (inst as any).correo,
+        logo_url: (inst as any).logo_url ?? null,
+        is_activo: (inst as any).is_activo ?? true,
+        created_at: (inst as any).created_at,
+        updated_at: (inst as any).updated_at,
+      },
+      token,
+      token_type: 'Bearer',
+      expires_in: EXPIRES_IN,
+      issued_at: DateTime.now().toISO(),
+    }
   }
 }

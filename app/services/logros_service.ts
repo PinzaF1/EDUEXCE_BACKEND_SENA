@@ -1,70 +1,80 @@
 // app/services/logros_service.ts
-import ProgresoNivel from '../models/progreso_nivel.js'
+import Sesion from '../models/sesione.js'
 
-type Area = 'Matematicas'|'Lenguaje'|'Ciencias'|'Sociales'|'Ingles'
-const AREAS: Area[] = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles']
+type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
+const AREAS: Area[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']
+
+// Umbral de aprobación para otorgar insignia por área (ajústalo si quieres)
+const PASS_THRESHOLD = 80
+
+function metaDeArea(a: Area) {
+  const nombreArea = a === 'Matematicas' ? 'Matemáticas' : a
+  return {
+    codigo: `ISLA_COMPLETA_${a.toUpperCase()}`,
+    nombre: `Isla completa: ${nombreArea}`,
+    descripcion: `Completaste todas las paradas del área de ${nombreArea}.`,
+    area: nombreArea,
+  }
+}
 
 export default class LogrosService {
-  /** HU-03: verificar si TODAS las paradas del área están superadas */
-  public async asignarInsigniaAreaSiCorresponde(id_usuario: number, area: Area) {
-    const filas = await ProgresoNivel
-      .query()
-      .where('id_usuario', id_usuario)
-      .where('area', area)
-      .select(['estado'])
-
-    if (!filas.length) {
-      return { otorgada: false, area, motivo: 'No hay paradas registradas en esta área' }
-    }
-
-    const todasSuperadas = (filas as any[]).every(f => String(f.estado) === 'superado')
-
-    if (todasSuperadas) {
-      const nombreArea = area === 'Matematicas' ? 'Matemáticas' : area
-      return {
-        otorgada: true,
-        area,
-        nombre: `Isla completa: ${nombreArea}`,
-        descripcion: `Completaste todas las paradas del área de ${nombreArea}.`
-      }
-    }
-
-    return { otorgada: false, area, motivo: 'Aún no se han superado todas las paradas del área' }
-  }
-
   /**
-   * HU-04: listar mis insignias (obtenidas y pendientes) SIN persistencia.
-   * Regresa 5 posibles “Isla completa: {Área}”.
+   * Devuelve {obtenidas, pendientes} calculando desde sesiones 'simulacro' cerradas.
+   * Criterio: existe un simulacro con fin_at y puntaje_porcentaje >= PASS_THRESHOLD en esa área.
    */
-  public async listarInsigniasCompletas(id_usuario: number) {
-    const obtenidas: Array<{codigo: string; nombre: string; descripcion: string; area: Area}> = []
-    const pendientes: Array<{codigo: string; nombre: string; descripcion: string; area: Area}> = []
+  async misLogros(id_usuario: number) {
+    const sims = await Sesion.query()
+      .where('id_usuario', id_usuario)
+      .where('tipo', 'simulacro')
+      .whereNotNull('fin_at')
+      .select(['area', 'puntaje_porcentaje'])
 
-    for (const area of AREAS) {
-      const check = await this.asignarInsigniaAreaSiCorresponde(id_usuario, area)
-      const nombreArea = area === 'Matematicas' ? 'Matemáticas' : area
-      const base = {
-        codigo: `ISLA_COMPLETA_${area.toUpperCase()}`,
-        nombre: `Isla completa: ${nombreArea}`,
-        descripcion: `Completaste todas las paradas del área de ${nombreArea}.`,
-        area,
-      }
-      if (check.otorgada) {
-        obtenidas.push(base)
-      } else {
-        pendientes.push(base)
-      }
+    const maxPorArea = new Map<Area, number>()
+    for (const s of sims) {
+      const area = (s as any).area as Area
+      if (!area) continue
+      const p = Number((s as any).puntaje_porcentaje ?? 0)
+      const prev = maxPorArea.get(area) ?? 0
+      if (p > prev) maxPorArea.set(area, p)
     }
+
+    const obtenidas = AREAS
+      .filter(a => (maxPorArea.get(a) ?? 0) >= PASS_THRESHOLD)
+      .map(metaDeArea)
+
+    const pendientes = AREAS
+      .filter(a => (maxPorArea.get(a) ?? 0) < PASS_THRESHOLD)
+      .map(metaDeArea)
 
     return { obtenidas, pendientes }
   }
 
   /**
-   * Compatibilidad con tu endpoint previo `misLogros`:
-   * si lo estás llamando desde el controlador, devolvemos el mismo formato
-   * (obtenidas/pendientes) calculado.
+   * Evalúa/otorga solo un área. Si quieres persistir en una tabla de logros, haz el upsert aquí.
    */
-  public async misLogros(id_usuario: number) {
-    return this.listarInsigniasCompletas(id_usuario)
+  async asignarInsigniaAreaSiCorresponde(id_usuario: number, area: Area) {
+    const fila = await Sesion.query()
+      .where('id_usuario', id_usuario)
+      .where('tipo', 'simulacro')
+      .where('area', area as any)
+      .whereNotNull('fin_at')
+      .orderBy('puntaje_porcentaje', 'desc')
+      .first()
+
+    const puntajeMax = Number((fila as any)?.puntaje_porcentaje ?? 0)
+    const otorgada = puntajeMax >= PASS_THRESHOLD
+
+    // Si usas persistencia de logros, haz el upsert aquí.
+    // await LogroUsuario.updateOrCreate({ id_usuario, codigo: `ISLA_COMPLETA_${area.toUpperCase()}` }, {...})
+
+    return {
+      otorgada,
+      area: area === 'Matematicas' ? 'Matemáticas' : area,
+      puntajeMax,
+    }
+  }
+
+  async listarInsigniasCompletas(id_usuario: number) {
+    return this.misLogros(id_usuario)
   }
 }

@@ -1,197 +1,266 @@
 // app/services/progreso_service.ts
 import Sesion from '../models/sesione.js'
-import ProgresoNivel from '../models/progreso_nivel.js'
+import SesionDetalle from '../models/sesiones_detalle.js'
+import BancoPregunta from '../models/banco_pregunta.js'
 
-type Area = 'Matematicas'|'Lenguaje'|'Ciencias'|'Sociales'|'Ingles'
-const AREAS: Area[] = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles']
+type Nivel = 'Básico' | 'Intermedio' | 'Avanzado' | 'Experto'
+type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
+const AREAS: Area[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']
 
-// ===== Helpers locales =====
-const nivelDe = (p: number) =>
-  p >= 91 ? 'Experto' : p >= 76 ? 'Avanzado' : p >= 51 ? 'Intermedio' : 'Básico'
-
-const etiquetaDe = (p: number) =>
-  p >= 75 ? 'Excelente' : p >= 60 ? 'Buen progreso' : 'Necesita mejorar'
-
-// normaliza: quita acentos, trim y minúsculas
-const norm = (s: string) =>
-  String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase()
-
-// construye mapa subtema → área con claves normalizadas (del usuario)
-async function buildAreaBySubtemaMap(id_usuario: number) {
-  const rows = await ProgresoNivel.query().where('id_usuario', id_usuario)
-  const map = new Map<string, Area>()
-  for (const r of rows) {
-    const sub = norm((r as any).subtema || '')
-    const ar  = (r as any).area as Area
-    if (sub && ar && !map.has(sub)) map.set(sub, ar)
-  }
-  return map
+function nivelPorcentaje(pct: number): Nivel {
+  if (pct >= 85) return 'Experto'
+  if (pct >= 70) return 'Avanzado'
+  if (pct >= 50) return 'Intermedio'
+  return 'Básico'
 }
 
-// obtiene área de la sesión o la infiere por subtema usando el mapa
-function getAreaFromSesionOrMap(s: any, areaBySubtema: Map<string, Area>): Area | null {
-  if (s.area) return s.area as Area
-  const sub = norm(String(s.subtema || ''))
-  return (areaBySubtema.get(sub) as Area | undefined) ?? null
+function safeNumber(n: any, def = 0) {
+  const v = Number(n)
+  return Number.isFinite(v) ? v : def
+}
+
+function duracionMin(inicio?: Date | string | null, fin?: Date | string | null) {
+  if (!inicio || !fin) return null
+  const t1 = new Date(inicio as any).getTime()
+  const t2 = new Date(fin as any).getTime()
+  if (!Number.isFinite(t1) || !Number.isFinite(t2)) return null
+  return Math.max(0, Math.round((t2 - t1) / 60000))
+}
+
+function porcentajeDeSesion(s: any) {
+  const total = safeNumber(s.total_preguntas)
+  const correctas = safeNumber(s.correctas)
+  let pct =
+    s.puntaje_porcentaje != null
+      ? safeNumber(s.puntaje_porcentaje)
+      : total > 0
+      ? Math.round((correctas * 100) / total)
+      : 0
+  return Math.max(0, Math.min(100, Math.round(pct)))
+}
+
+// Muestra “Simulacro” en UI cuando el tipo sea simulacro
+function etiquetaNivel(tipo: string, pct: number): string {
+  return String(tipo) === 'simulacro' ? 'Simulacro' : nivelPorcentaje(pct)
 }
 
 export default class ProgresoService {
-  /**
-   * Base: calcula promedios, arma historial y niveles.
-   * Ahora convierte fechas a ISO y usa progreso_nivel para inferir áreas cuando vienen null.
-   */
-  async resumenEstudiante(id_usuario: number) {
-    const ses = await Sesion.query()
+  // ======= HISTORIAL (lista) =======
+  async historialUsuario(id_usuario: number, { page = 1, limit = 20 } = {}) {
+    const q = Sesion.query()
       .where('id_usuario', id_usuario)
+      .whereIn('tipo', ['practica', 'simulacro'])     // ← incluir simulacros
       .orderBy('inicio_at', 'desc')
+      .orderBy('id_sesion', 'desc')                   // ← desempate estable
 
-    if (!ses.length) return { porcentaje_global: 0, por_area: {}, simulacros: [], niveles: [] }
+    const paginator = await q.paginate(page, limit)
+    const rows = paginator.all()
 
-    // mapa subtema → área (fallback)
-    const areaBySubtema = await buildAreaBySubtemaMap(id_usuario)
+    const items = rows.map((s: any) => {
+      const pct = porcentajeDeSesion(s)
+      const fecha = s.fin_at ?? s.inicio_at
+      const total = safeNumber(s.total_preguntas)
+      const detalleDisponible = !!s.fin_at && total > 0
 
-    // ----- promedios por área (considera fallback) -----
-    const por_area: Record<Area, number> = { Matematicas:0, Lenguaje:0, Ciencias:0, Sociales:0, Ingles:0 }
-    for (const a of AREAS) {
-      const s = ses.filter(x => {
-        const area = getAreaFromSesionOrMap(x as any, areaBySubtema)
-        return area === a && (x as any).puntaje_porcentaje != null
-      })
-      por_area[a] = s.length
-        ? Math.round(s.reduce((acc,b)=> acc + ((b as any).puntaje_porcentaje||0),0)/s.length)
-        : 0
-    }
-    const global = Math.round(Object.values(por_area).reduce((a,b)=> a+b, 0)/AREAS.length)
-
-    // ----- historial de simulacros (solo los que conocemos el área) -----
-    const simulacros = ses
-      .filter(x => String((x as any).tipo).toLowerCase() === 'simulacro')
-      .map(x => {
-        const area = getAreaFromSesionOrMap(x as any, areaBySubtema)
-        return {
-          id_sesion: (x as any).id_sesion,
-          area, // puede ser null aquí, lo filtramos abajo
-          puntaje: (x as any).puntaje_porcentaje || 0,
-          fecha: ((x as any).fin_at?.toISO?.() || (x as any).inicio_at?.toISO?.() || null),
-        }
-      })
-      .filter(s => !!s.area) // descartamos los que aún no se pueden inferir
-
-    // ----- línea de niveles (orden ascendente por nivel_orden) -----
-    const niveles = ses
-      .filter(x => (x as any).nivel_orden != null)
-      .sort((a,b)=> ((a as any).nivel_orden||0) - ((b as any).nivel_orden||0))
-      .map(x => ({
-        area: getAreaFromSesionOrMap(x as any, areaBySubtema),
-        nivel: (x as any).nivel_orden
-      }))
-
-    return { porcentaje_global: global, por_area, simulacros, niveles }
-  }
-
-  /** Pestaña: General */
-  async resumenGeneral(id_usuario: number) {
-    const base = await this.resumenEstudiante(id_usuario)
-    const pg = Number(base.porcentaje_global || 0)
-
-    const niveles = [
-      { nombre: 'Básico',     min: 0,  max: 50,  rango: '0-50%',   actual: pg <= 50,                 valor: pg },
-      { nombre: 'Intermedio', min: 51, max: 75,  rango: '51-75%',  actual: pg >= 51 && pg <= 75,     valor: pg },
-      { nombre: 'Avanzado',   min: 76, max: 90,  rango: '76-90%',  actual: pg >= 76 && pg <= 90,     valor: pg },
-      { nombre: 'Experto',    min: 91, max: 100, rango: '91-100%', actual: pg >= 91,                 valor: pg },
-    ]
-
-    return { progresoGlobal: pg, nivelActual: nivelDe(pg), niveles }
-  }
-
-  /** Pestaña: Por Materias */
-  async porMaterias(id_usuario: number) {
-    const base = await this.resumenEstudiante(id_usuario)
-    const materias = AREAS.map((a) => {
-      const porcentaje = Number((base.por_area as any)?.[a] || 0)
       return {
-        nombre: a === 'Matematicas' ? 'Matemáticas' : a,
-        porcentaje,
-        etiqueta: etiquetaDe(porcentaje),
+        intentoId: String(s.id_sesion ?? s.id ?? s.id_sesione ?? ''),
+        materia: String(s.area ?? (s.tipo === 'simulacro' ? 'Mixto' : 'General')),
+        porcentaje: pct,
+        nivel: nivelPorcentaje(pct),                 // nivel “numérico” (útil para analítica)
+        etiquetaNivel: etiquetaNivel(s.tipo, pct),   // etiqueta para UI (“Simulacro” o nivel)
+        fecha: fecha ? new Date(fecha).toISOString() : null,
+        detalleDisponible,
+        tipo: s.tipo,                                // para badge en el front
+        subtema: s.subtema ?? null,
       }
     })
-    return { materias }
-  }
-
-  /** Pestaña: Historial (lista con filtros/paginación) */
-  async historial(
-    id_usuario: number,
-    opts?: { materia?: string; page?: number; limit?: number; desde?: string; hasta?: string }
-  ) {
-    const { materia, page = 1, limit = 20, desde, hasta } = opts || {}
-    const base = await this.resumenEstudiante(id_usuario)
-
-    let items = (base.simulacros || []).map((s: any) => ({
-      id_sesion: s.id_sesion,
-      materia: s.area, // ya no debería ser null (filtrado arriba)
-      porcentaje: Number(s.puntaje || 0),
-      nivel: nivelDe(Number(s.puntaje || 0)),
-      fecha: s.fecha,
-    }))
-
-    if (materia) items = items.filter(i => String(i.materia).toLowerCase() === String(materia).toLowerCase())
-    if (desde)   items = items.filter(i => new Date(i.fecha) >= new Date(desde))
-    if (hasta)   items = items.filter(i => new Date(i.fecha) <= new Date(hasta))
-
-    items.sort((a,b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())
-
-    const p = Math.max(1, Number(page))
-    const l = Math.max(1, Math.min(100, Number(limit)))
-    const start = (p - 1) * l
 
     return {
-      items: items.slice(start, start + l).map(i => ({
-        intentoId: i.id_sesion,
-        materia: i.materia,
-        porcentaje: i.porcentaje,
-        nivel: i.nivel,
-        fecha: i.fecha,
-        detalleDisponible: true
-      })),
-      page: p,
-      limit: l,
-      total: items.length
+      items,
+      page: paginator.currentPage,
+      limit: paginator.perPage,
+      total: paginator.total,
     }
   }
 
-  /** Historial (detalle de un intento) */
-  async historialDetalle(id_usuario: number, id_sesion: number) {
-    const ses = await Sesion.query()
-      .where('id_sesion', id_sesion)
-      .andWhere('id_usuario', id_usuario)
-      .first()
+  // ======= DETALLE (resumen de un intento) =======
+  async detalleIntento(id_sesion: number) {
+    const s: any = await Sesion.findBy('id_sesion', id_sesion)
+    if (!s) return { error: 'Intento no encontrado' }
 
-    if (!ses) return null
-
-    // inferir área si viene null
-    let materia = (ses as any).area || null
-    if (!materia) {
-      const map = await buildAreaBySubtemaMap(id_usuario)
-      materia = getAreaFromSesionOrMap(ses as any, map)
-    }
-
-    const total = Number((ses as any).total_preguntas || 0)
-    const correctas = Number((ses as any).correctas || 0)
-    const porcentaje = (ses as any).puntaje_porcentaje != null
-      ? Number((ses as any).puntaje_porcentaje)
-      : (total > 0 ? Math.round((correctas / total) * 100) : 0)
+    const total = safeNumber(s.total_preguntas)
+    const correctas = safeNumber(s.correctas)
+    const incorrectas = total > 0 ? Math.max(0, total - correctas) : 0
+    const pct = porcentajeDeSesion(s)
+    const duracion = duracionMin(s.inicio_at, s.fin_at)
 
     return {
-      intentoId: (ses as any).id_sesion,
-      materia, // ya no debe ser null si hay match en progreso_nivel
-      porcentaje,
-      nivel: nivelDe(porcentaje),
-      fecha: ((ses as any).fin_at?.toISO?.() || (ses as any).inicio_at?.toISO?.() || null),
-      preguntas: {
-        total,
+      intentoId: String(s.id_sesion),
+      materia: String(s.area ?? (s.tipo === 'simulacro' ? 'Mixto' : 'General')),
+      porcentaje: pct,
+      nivel: nivelPorcentaje(pct),
+      etiquetaNivel: etiquetaNivel(s.tipo, pct),
+      tipo: s.tipo,
+      subtema: s.subtema ?? null,
+      fecha: (s.fin_at ?? s.inicio_at) ? new Date(s.fin_at ?? s.inicio_at).toISOString() : null,
+      resumen: {
+        respondidas: total,
         correctas,
-        incorrectas: (total && correctas != null) ? (total - correctas) : null,
+        incorrectas,
+        tiempo_min: duracion,
+      },
+    }
+  }
+
+  // ======= PREGUNTAS del intento =======
+  async preguntasIntento(id_sesion: number) {
+    const detalles = await SesionDetalle
+      .query()
+      .where('id_sesion', id_sesion)
+      .orderByRaw('COALESCE(numero, orden) ASC')
+
+    const idsBanco = Array.from(
+      new Set((detalles as any[]).map((d) => Number(d.id_pregunta)).filter((x) => Number.isFinite(x)))
+    )
+    const banco = idsBanco.length ? await BancoPregunta.query().whereIn('id_pregunta', idsBanco) : []
+    const byId = new Map<number, any>()
+    for (const b of banco as any[]) byId.set(Number(b.id_pregunta), b)
+
+    const items = (detalles as any[]).map((d) => {
+      const b = d.id_pregunta ? byId.get(Number(d.id_pregunta)) : null
+      const opciones = (() => {
+        const raw = d.opciones ?? b?.opciones ?? null
+        if (!raw) return []
+        if (Array.isArray(raw)) return raw
+        try { const arr = JSON.parse(String(raw)); return Array.isArray(arr) ? arr : [] } catch { return [] }
+      })()
+      const marcada = String((d as any).alternativa_elegida ?? (d as any).opcion_marcada ?? '')
+      const correcta = String((d as any).opcion_correcta ?? b?.respuesta_correcta ?? b?.opcion_correcta ?? '')
+      return {
+        numero: Number((d as any).numero ?? (d as any).orden ?? 0),
+        enunciado: String((d as any).enunciado ?? b?.enunciado ?? b?.pregunta ?? ''),
+        opciones,
+        opcionMarcada: marcada,
+        opcionCorrecta: correcta,
+        correcta: marcada && correcta ? marcada.toUpperCase() === correcta.toUpperCase() : false,
+        explicacion: String((d as any).explicacion ?? b?.explicacion ?? ''),
+      }
+    })
+
+    return { preguntas: items }
+  }
+
+  // ======= ANÁLISIS simple =======
+  async analisisIntento(id_sesion: number) {
+    const detalles = await SesionDetalle.query().where('id_sesion', id_sesion)
+
+    const idsBanco = Array.from(
+      new Set((detalles as any[]).map((d) => Number(d.id_pregunta)).filter((x) => Number.isFinite(x)))
+    )
+    const banco = idsBanco.length
+      ? await BancoPregunta.query().whereIn('id_pregunta', idsBanco).select(['id_pregunta', 'tema', 'competencia'])
+      : []
+
+    const temaPorPregunta = new Map<number, string>()
+    for (const b of banco as any[]) {
+      const tema =
+        (b.tema && String(b.tema).trim()) ||
+        (b.competencia && String(b.competencia).trim()) ||
+        'General'
+      temaPorPregunta.set(Number(b.id_pregunta), tema)
+    }
+
+    const stats = new Map<string, { ok: number; total: number }>()
+    const inc = (k: string, ok: boolean) => {
+      if (!stats.has(k)) stats.set(k, { ok: 0, total: 0 })
+      const s = stats.get(k)!; s.total++; if (ok) s.ok++
+    }
+
+    for (const d of detalles as any[]) {
+      const tema = d.id_pregunta ? (temaPorPregunta.get(Number(d.id_pregunta)) ?? 'General') : 'General'
+      const marcada = String((d as any).alternativa_elegida ?? (d as any).opcion_marcada ?? '').toUpperCase()
+      const correcta = String((d as any).opcion_correcta ?? '').toUpperCase()
+      const ok = !!marcada && !!correcta && marcada === correcta
+      inc(tema, ok)
+    }
+
+    const items = Array.from(stats.entries()).map(([tema, s]) => {
+      const pct = s.total ? Math.round((s.ok * 100) / s.total) : 0
+      return { tema, pct, ok: s.ok, total: s.total }
+    })
+
+    const fortalezas = items.filter((x) => x.pct >= 75).map((x) => x.tema)
+    const mejoras = items.filter((x) => x.pct < 50).map((x) => x.tema)
+
+    const recomendaciones = [
+      ...mejoras.map((t) => `Practicar más ejercicios de ${t}`),
+      'Revisar explicaciones de las preguntas falladas',
+      'Realizar simulacros adicionales para consolidar',
+    ]
+
+    return { fortalezas, mejoras, recomendaciones, breakdown: items }
+  }
+
+  // ======= GENERAL (KPIs) =======
+  async general(id_usuario: number, { dias = 90 } = {}) {
+    const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000)
+    const sesiones = await Sesion.query()
+      .where('id_usuario', id_usuario)
+      .where((qb: any) => {
+        qb.where('inicio_at', '>=', desde as any).orWhere('fin_at', '>=', desde as any)
+      })
+      .orderBy('inicio_at', 'desc')
+
+    if (!sesiones.length) {
+      return {
+        porcentaje: 0,
+        nivel: 'Básico' as Nivel,
+        intentos: 0,
+        tiempo_total_min: 0,
       }
     }
+
+    let sumPct = 0, nPct = 0, tiempo = 0
+    for (const s of sesiones as any[]) {
+      const pct = porcentajeDeSesion(s)
+      sumPct += pct
+      nPct++
+      const t = duracionMin(s.inicio_at, s.fin_at)
+      if (t != null) tiempo += t
+    }
+
+    const promedio = nPct ? Math.round(sumPct / nPct) : 0
+    return {
+      porcentaje: promedio,
+      nivel: nivelPorcentaje(promedio),
+      intentos: sesiones.length,
+      tiempo_total_min: tiempo,
+    }
+  }
+
+  // ======= POR MATERIAS =======
+  async porMaterias(id_usuario: number, { dias = 90 } = {}) {
+    const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000)
+    const sesiones = await Sesion.query()
+      .where('id_usuario', id_usuario)
+      .where((qb: any) => {
+        qb.where('inicio_at', '>=', desde as any).orWhere('fin_at', '>=', desde as any)
+      })
+
+    const map = new Map<Area, number[]>()
+    for (const a of AREAS) map.set(a, [])
+    for (const s of sesiones as any[]) {
+      const area = (s.area ?? '') as Area
+      if (!AREAS.includes(area)) continue
+      map.get(area)!.push(porcentajeDeSesion(s))
+    }
+
+    const items = AREAS.map((a) => {
+      const vals = map.get(a) ?? []
+      const prom = vals.length ? Math.round(vals.reduce((x, y) => x + y, 0) / vals.length) : 0
+      return { materia: a, porcentaje: prom, nivel: nivelPorcentaje(prom), intentos: vals.length }
+    })
+
+    return { items }
   }
 }

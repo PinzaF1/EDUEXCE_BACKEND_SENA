@@ -34,7 +34,7 @@ export default class SeguimientoAdminService {
   }
 
   // 2) Comparativo por cursos (mes actual): promedio y progreso % vs mes anterior
-  // 2) Comparativo por cursos (mes actual): promedio y progreso (delta de puntos) vs mes anterior
+ 
 async comparativoPorCursos(id_institucion: number) {
   const { inicio, fin } = rangoMes(new Date())
   const inicioPrev = new Date(inicio.getFullYear(), inicio.getMonth() - 1, 1)

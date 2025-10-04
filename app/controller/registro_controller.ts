@@ -1,4 +1,3 @@
-// app/controller/registro_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import RegistroService from '../services/registro_service.js'
 
@@ -7,8 +6,8 @@ const registroService = new RegistroService()
 export default class RegistroController {
   public async registrarInstitucion({ request, response }: HttpContext) {
     try {
-      // Campos base
-      const base = request.only([
+      // Campos base + alias de confirmación
+      const body = request.only([
         'nombre_institucion',
         'codigo_dane',
         'ciudad',
@@ -18,18 +17,16 @@ export default class RegistroController {
         'correo',
         'password',
         'jornada',
+        'confirm_password',
+        'password_confirmation',
       ]) as any
 
-      // Agrega confirm_password (acepta alias password_confirmation)
       const datos = {
-        ...base,
-        confirm_password:
-          request.input('confirm_password') ??
-          request.input('password_confirmation') ??
-          '',
+        ...body,
+        confirm_password: body?.confirm_password ?? body?.password_confirmation ?? '',
       }
 
-      // Chequeo rápido (opcional). El service también valida.
+      // Validación rápida de coincidencia (el service valida todo igual)
       if (datos.confirm_password && datos.confirm_password !== datos.password) {
         return response.badRequest({ error: 'Las contraseñas no coinciden' })
       }
@@ -37,7 +34,7 @@ export default class RegistroController {
       const resultado = await registroService.registrarInstitucion(datos)
       return response.created(resultado)
     } catch (e: any) {
-      return response.badRequest({ error: e.message || 'Error al registrar institución' })
+      return response.badRequest({ error: e?.message || 'Error al registrar institución' })
     }
   }
 }

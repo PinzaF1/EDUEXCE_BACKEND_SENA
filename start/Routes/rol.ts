@@ -16,7 +16,7 @@ Route.post('auth/recovery/estudiante/enviar', (ctx) => new AuthController().envi
 Route.post('auth/recovery/estudiante/restablecer', (ctx) => new AuthController().restablecerEstudiante(ctx))
 
 // ADMIN web
-Route.get('admin/seguimiento', (ctx) => new AdminController().seguimiento(ctx)).use(onlyRol({ rol: 'administrador' }))
+
 Route.get('admin/estudiantes', (ctx) => new AdminController().listarEstudiantes(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/estudiantes', (ctx) => new AdminController().crearEstudiante(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/estudiantes/importar', (ctx) => new AdminController().importarEstudiantes(ctx)).use(onlyRol({ rol: 'administrador' }))
@@ -44,6 +44,7 @@ Route.post('quiz-inicial/cerrar',(ctx) => new MovilController().quizInicialCerra
 Route.post('sesion/parada', (ctx) => new MovilController().crearParada(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('sesion/cerrar', (ctx) => new MovilController().cerrarSesion(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/simulacro', (ctx) => new MovilController().crearSimulacro(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/simulacro/cerrar', (ctx) => new MovilController().cerrarSimulacro(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 // ISLA DEL CONOCIMIENTO 
 Route.post('movil/isla/simulacro', (ctx) => new MovilController().islaSimulacroIniciar(ctx)).use(onlyRol({ rol: 'estudiante' }))
@@ -51,7 +52,7 @@ Route.post('movil/isla/simulacro/cerrar', (ctx) => new MovilController().islaSim
 Route.get('movil/isla/simulacro/:id_sesion/resumen', (ctx) => new MovilController().islaSimulacroResumen(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 // PROGRESO MOVIL
-Route.get('movil/progreso/resumen',   (ctx) => new MovilController().progresoResumen(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/progreso/resumen',   (ctx) => new MovilController().progresoGeneral(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/materias',  (ctx) => new MovilController().progresoPorMaterias(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/historial', (ctx) => new MovilController().progresoHistorial(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/historial/:id_sesion', (ctx) => new MovilController().progresoHistorialDetalle(ctx)).use(onlyRol({ rol: 'estudiante' }))

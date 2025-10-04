@@ -11,9 +11,18 @@ import jwt, { Secret } from 'jsonwebtoken'
 const SECRET: Secret = (process.env.JWT_SECRET ?? 'secret123') as Secret
 const IMPORT_FIRMA = 'svc-estudiantes-uni-global-v1' // opcional: para verificar versión
 
+// ===== Helpers de normalización =====
+const clean = (v: any) => {
+  if (v == null) return null
+  const s = String(v).trim()
+  return s === '' ? null : s
+}
+const up = (v: any) => (clean(v)?.toUpperCase() ?? null)
+const low = (v: any) => (clean(v)?.toLowerCase() ?? null)
+
 function normGrado(g: any): string | null {
-  if (g == null) return null
-  const s = String(g).toLowerCase()
+  const s = low(g)
+  if (!s) return null
   if (s.includes('10')) return '10'
   if (s.includes('11')) return '11'
   const num = s.replace(/\D/g, '')
@@ -21,17 +30,20 @@ function normGrado(g: any): string | null {
   return null
 }
 function normCurso(c: any): string | null {
-  if (c == null) return null
-  const s = String(c).trim().toUpperCase()
-  return s || null
+  const s = clean(c)
+  return s ? s.toUpperCase() : null
 }
 function normJornada(j: any): string | null {
-  if (j == null) return null
-  const s = String(j).trim().toLowerCase()
+  const s = low(j)
+  if (!s) return null
   if (['mañana', 'manana'].includes(s)) return 'mañana'
   if (s.includes('tarde')) return 'tarde'
   if (s.includes('completa')) return 'completa'
   return null
+}
+function normEmail(e: any): string | null {
+  const s = low(e)
+  return s && s.includes('@') ? s : null
 }
 
 export default class EstudiantesService {
@@ -39,6 +51,7 @@ export default class EstudiantesService {
     return `${numero_documento}${(apellido || '').toLowerCase().slice(-3)}`
   }
 
+  // ===== Crear/actualizar 1 estudiante (admin) =====
   async crearUno(d: {
     id_institucion: number
     tipo_documento: string
@@ -52,35 +65,58 @@ export default class EstudiantesService {
     curso?: string | null
     jornada?: string | null
   }) {
+    // Normalizar
+    const payload = {
+      id_institucion: Number(d.id_institucion),
+      tipo_documento: up(d.tipo_documento),
+      numero_documento: clean(d.numero_documento),
+      nombre: clean(d.nombre),
+      apellido: clean(d.apellido),
+      correo: normEmail(d.correo),
+      direccion: clean(d.direccion),
+      telefono: clean(d.telefono),
+      grado: normGrado(d.grado),
+      curso: normCurso(d.curso),
+      jornada: normJornada(d.jornada),
+    }
+
+    // Validaciones mínimas
+    const faltan: string[] = []
+    if (!payload.tipo_documento) faltan.push('tipo_documento')
+    if (!payload.numero_documento) faltan.push('numero_documento')
+    if (!payload.nombre) faltan.push('nombre')
+    if (!payload.apellido) faltan.push('apellido')
+    if (faltan.length) {
+      throw new Error(`Campos obligatorios: ${faltan.join(', ')}`)
+    }
+
     // Unicidad GLOBAL por numero_documento
-    const ya = await Usuario.query()
-      .where('numero_documento', d.numero_documento)
-      .first()
-    if (ya && (ya as any).id_institucion !== d.id_institucion) {
+    const ya = await Usuario.query().where('numero_documento', payload.numero_documento!).first()
+    if (ya && (ya as any).id_institucion !== payload.id_institucion) {
       throw new Error('El número de documento ya está registrado en otra institución')
     }
 
-    const plano = this.claveInicial(d.numero_documento, d.apellido)
+    const plano = this.claveInicial(payload.numero_documento!, payload.apellido!)
     const hash = await bcrypt.hash(plano, 10)
 
     const u = await Usuario.updateOrCreate(
       {
-        id_institucion: d.id_institucion,
-        numero_documento: d.numero_documento,
+        id_institucion: payload.id_institucion,
+        numero_documento: payload.numero_documento!,
       },
       {
-        id_institucion: d.id_institucion,
+        id_institucion: payload.id_institucion,
         rol: 'estudiante',
-        tipo_documento: d.tipo_documento,
-        numero_documento: d.numero_documento,
-        nombre: d.nombre,
-        apellido: d.apellido,
-        correo: d.correo ?? null,
-        direccion: d.direccion ?? null,
-        telefono: d.telefono ?? null,
-        grado: d.grado ?? null,
-        curso: d.curso ?? null,
-        jornada: d.jornada ?? null,
+        tipo_documento: payload.tipo_documento!,
+        numero_documento: payload.numero_documento!,
+        nombre: payload.nombre!,
+        apellido: payload.apellido!,
+        correo: payload.correo ?? null,
+        direccion: payload.direccion ?? null,
+        telefono: payload.telefono ?? null,
+        grado: payload.grado ?? null,
+        curso: payload.curso ?? null,
+        jornada: payload.jornada ?? null,
         password_hash: hash,
         is_active: true,
       } as any
@@ -88,22 +124,22 @@ export default class EstudiantesService {
 
     return {
       id_usuario: u.id_usuario,
-      usuario: d.numero_documento,
+      usuario: payload.numero_documento,
       password_temporal: plano,
       estudiante: {
         id_usuario: u.id_usuario,
-        id_institucion: d.id_institucion,
+        id_institucion: payload.id_institucion,
         rol: 'estudiante',
-        tipo_documento: d.tipo_documento,
-        numero_documento: d.numero_documento,
-        nombre: d.nombre,
-        apellido: d.apellido,
-        correo: d.correo ?? null,
-        direccion: d.direccion ?? null,
-        telefono: d.telefono ?? null,
-        grado: d.grado ?? null,
-        curso: d.curso ?? null,
-        jornada: d.jornada ?? null,
+        tipo_documento: payload.tipo_documento,
+        numero_documento: payload.numero_documento,
+        nombre: payload.nombre,
+        apellido: payload.apellido,
+        correo: payload.correo,
+        direccion: payload.direccion,
+        telefono: payload.telefono,
+        grado: payload.grado,
+        curso: payload.curso,
+        jornada: payload.jornada,
         is_active: true,
         created_at: (u as any).created_at,
         updated_at: (u as any).updated_at,
@@ -216,9 +252,9 @@ export default class EstudiantesService {
           numero_documento,
           nombre: mapVal(r, 'nombre', 'nombres', 'nombre_usuario'),
           apellido: mapVal(r, 'apellido', 'apellidos'),
-          correo: mapVal(r, 'correo', 'email') || null,
-          direccion: mapVal(r, 'direccion') || null,
-          telefono: mapVal(r, 'telefono', 'tel') || null,
+          correo: normEmail(mapVal(r, 'correo', 'email')),
+          direccion: clean(mapVal(r, 'direccion')),
+          telefono: clean(mapVal(r, 'telefono', 'tel')),
           grado: normGrado(mapVal(r, 'grado')),
           curso: normCurso(mapVal(r, 'curso')),
           jornada: normJornada(mapVal(r, 'jornada')),
@@ -292,15 +328,15 @@ export default class EstudiantesService {
         const set = (k: keyof any, val: any) => {
           if ((u as any)[k] !== val) { (u as any)[k] = val; camb++ }
         }
-        set('tipo_documento', e.tipo_documento)
-        set('nombre', e.nombre)
-        set('apellido', e.apellido)
-        set('correo', e.correo)
-        set('direccion', e.direccion)
-        set('telefono', e.telefono)
-        set('grado', e.grado)
-        set('curso', e.curso)
-        set('jornada', e.jornada)
+        set('tipo_documento', up(e.tipo_documento))
+        set('nombre', clean(e.nombre))
+        set('apellido', clean(e.apellido))
+        set('correo', normEmail(e.correo))
+        set('direccion', clean(e.direccion))
+        set('telefono', clean(e.telefono))
+        set('grado', normGrado(e.grado))
+        set('curso', normCurso(e.curso))
+        set('jornada', normJornada(e.jornada))
         if (camb) { await u.save(); actualizados++ }
       }
 
@@ -310,14 +346,14 @@ export default class EstudiantesService {
       const omitidos = omitidos_por_existir + omitidos_por_otras_instituciones
 
       return response.ok({
-        firma: IMPORT_FIRMA, // opcional
+        firma: IMPORT_FIRMA,
         creados: creadosDocs,
         mensaje: 'Importación finalizada',
         parseado_como: parseadoComo,
         insertados: creadosDocs.length,
         actualizados,
         duplicados_en_archivo,
-        duplicados: duplicados_en_archivo, // ← para la UI
+        duplicados: duplicados_en_archivo, // alias FE
         omitidos_por_existir,
         omitidos_por_otras_instituciones,
         documentos_en_otras_instituciones: conflictosOtraInst.slice(0, 10).map(x => x.numero_documento),
@@ -333,19 +369,19 @@ export default class EstudiantesService {
   async importarMasivo(id_institucion: number, filas: any[]) {
     const vistos = new Set<string>()
     const candidatos = (Array.isArray(filas) ? filas : []).map((r) => {
-      const numero_documento = String(r.numero_documento ?? r.documento ?? '').trim()
-      const tipo_documento = String(r.tipo_documento ?? r.tipo ?? '').trim().toUpperCase()
-      const nombre = String(r.nombre ?? r.nombres ?? '').trim()
-      const apellido = String(r.apellido ?? r.apellidos ?? '').trim()
+      const numero_documento = clean(r.numero_documento ?? r.documento)
+      const tipo_documento = up(r.tipo_documento ?? r.tipo)
+      const nombre = clean(r.nombre ?? r.nombres)
+      const apellido = clean(r.apellido ?? r.apellidos)
       return {
         id_institucion,
         tipo_documento,
         numero_documento,
         nombre,
         apellido,
-        correo: r.correo ? String(r.correo).trim() : null,
-        direccion: r.direccion ? String(r.direccion).trim() : null,
-        telefono: r.telefono ? String(r.telefono).trim() : null,
+        correo: normEmail(r.correo),
+        direccion: clean(r.direccion),
+        telefono: clean(r.telefono),
         grado: normGrado(r.grado),
         curso: normCurso(r.curso),
         jornada: normJornada(r.jornada),
@@ -360,7 +396,7 @@ export default class EstudiantesService {
     // EXISTENTES globalmente
     const existentesRows = await Usuario
       .query()
-      .whereIn('numero_documento', candidatos.map((c) => c.numero_documento))
+      .whereIn('numero_documento', candidatos.map((c) => c.numero_documento as string))
       .select(['id_usuario', 'numero_documento', 'id_institucion'])
 
     const existePorDoc = new Map<string, { id_usuario: number; id_institucion: number }>()
@@ -376,7 +412,7 @@ export default class EstudiantesService {
     const conflictosOtraInst: any[] = []
 
     for (const c of candidatos) {
-      const ex = existePorDoc.get(c.numero_documento)
+      const ex = existePorDoc.get(c.numero_documento!)
       if (!ex) aInsertar.push(c)
       else if (ex.id_institucion === id_institucion) aActualizar.push(c)
       else conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
@@ -384,10 +420,10 @@ export default class EstudiantesService {
 
     const creadosDocs: string[] = []
     for (const e of aInsertar) {
-      const plano = this.claveInicial(e.numero_documento, e.apellido)
+      const plano = this.claveInicial(e.numero_documento!, e.apellido!)
       const hash = await bcrypt.hash(plano, 10)
       const u = await Usuario.create({ ...e, rol: 'estudiante', password_hash: hash, is_active: true } as any)
-      if (u?.id_usuario) creadosDocs.push(e.numero_documento)
+      if (u?.id_usuario) creadosDocs.push(e.numero_documento!)
     }
 
     let actualizados = 0
@@ -398,15 +434,15 @@ export default class EstudiantesService {
       const set = (k: keyof any, val: any) => {
         if ((u as any)[k] !== val) { (u as any)[k] = val; camb++ }
       }
-      set('tipo_documento', e.tipo_documento)
-      set('nombre', e.nombre)
-      set('apellido', e.apellido)
-      set('correo', e.correo)
-      set('direccion', e.direccion)
-      set('telefono', e.telefono)
-      set('grado', e.grado)
-      set('curso', e.curso)
-      set('jornada', e.jornada)
+      set('tipo_documento', up(e.tipo_documento))
+      set('nombre', clean(e.nombre))
+      set('apellido', clean(e.apellido))
+      set('correo', normEmail(e.correo))
+      set('direccion', clean(e.direccion))
+      set('telefono', clean(e.telefono))
+      set('grado', normGrado(e.grado))
+      set('curso', normCurso(e.curso))
+      set('jornada', normJornada(e.jornada))
       if (camb) { await u.save(); actualizados++ }
     }
 
@@ -416,7 +452,7 @@ export default class EstudiantesService {
     const omitidos = omitidos_por_existir + omitidos_por_otras_instituciones
 
     return {
-      firma: IMPORT_FIRMA, // opcional
+      firma: IMPORT_FIRMA,
       creados: creadosDocs,
       insertados: creadosDocs.length,
       actualizados,
@@ -429,13 +465,14 @@ export default class EstudiantesService {
     }
   }
 
+  // ===== Listado con filtros =====
   async listar(d: { id_institucion: number; grado?: string; curso?: string; jornada?: string; busqueda?: string }) {
     let q = Usuario.query().where('rol', 'estudiante').where('id_institucion', d.id_institucion)
     if (d.grado) q = q.where('grado', d.grado)
     if (d.curso) q = q.where('curso', d.curso)
     if (d.jornada) q = q.where('jornada', d.jornada)
     if (d.busqueda) {
-      const s = `%${d.busqueda.toLowerCase()}%`
+      const s = `%${String(d.busqueda).toLowerCase()}%`
       q = q.where((builder) => {
         builder
           .whereILike('numero_documento', s)
@@ -444,10 +481,10 @@ export default class EstudiantesService {
           .orWhereILike('correo', s)
       })
     }
-    return await q.orderBy('apellido', 'asc')
+    return await q.orderBy('apellido', 'asc').orderBy('nombre', 'asc')
   }
 
-  /** ====== CORREGIDO: lectura de perfil desde token de estudiante ====== */
+  /** ====== Perfil estudiante desde token ====== */
   async perfilEstudiante(token: string) {
     try {
       const payload: any = jwt.verify(token, SECRET)
@@ -471,9 +508,7 @@ export default class EstudiantesService {
       }
 
       const est = await Usuario.findBy('id_usuario', idUsuario)
-      if (!est) {
-        return { error: 'Perfil no encontrado' }
-      }
+      if (!est) return { error: 'Perfil no encontrado' }
 
       if (String((est as any).rol ?? '').toLowerCase() !== 'estudiante') {
         return { error: 'El usuario no es de tipo estudiante' }
@@ -493,6 +528,7 @@ export default class EstudiantesService {
     }
   }
 
+  // ===== Editar estudiante (admin) =====
   async editar(id_usuario: number, cambios: Partial<{
     tipo_documento: string
     numero_documento: string
@@ -509,11 +545,11 @@ export default class EstudiantesService {
     const u = await Usuario.findOrFail(id_usuario)
 
     if (cambios.tipo_documento !== undefined) {
-      ;(u as any).tipo_documento = String(cambios.tipo_documento).trim().toUpperCase()
+      ;(u as any).tipo_documento = up(cambios.tipo_documento)
     }
 
     if (cambios.numero_documento !== undefined) {
-      const nuevoDoc = String(cambios.numero_documento).trim()
+      const nuevoDoc = clean(cambios.numero_documento)
       if (nuevoDoc && nuevoDoc !== (u as any).numero_documento) {
         // Unicidad GLOBAL al editar
         const existe = await Usuario.query()
@@ -525,20 +561,21 @@ export default class EstudiantesService {
       }
     }
 
-    if (cambios.correo !== undefined) (u as any).correo = cambios.correo
-    if (cambios.direccion !== undefined) (u as any).direccion = cambios.direccion
-    if (cambios.telefono !== undefined) (u as any).telefono = cambios.telefono
-    if (cambios.grado !== undefined) (u as any).grado = cambios.grado
-    if (cambios.curso !== undefined) (u as any).curso = cambios.curso
-    if (cambios.jornada !== undefined) (u as any).jornada = cambios.jornada
-    if (cambios.nombre !== undefined) (u as any).nombre = cambios.nombre
-    if (cambios.apellido !== undefined) (u as any).apellido = cambios.apellido
+    if (cambios.correo !== undefined) (u as any).correo = normEmail(cambios.correo)
+    if (cambios.direccion !== undefined) (u as any).direccion = clean(cambios.direccion)
+    if (cambios.telefono !== undefined) (u as any).telefono = clean(cambios.telefono)
+    if (cambios.grado !== undefined) (u as any).grado = normGrado(cambios.grado)
+    if (cambios.curso !== undefined) (u as any).curso = normCurso(cambios.curso)
+    if (cambios.jornada !== undefined) (u as any).jornada = normJornada(cambios.jornada)
+    if (cambios.nombre !== undefined) (u as any).nombre = clean(cambios.nombre)
+    if (cambios.apellido !== undefined) (u as any).apellido = clean(cambios.apellido)
     if (cambios.is_active !== undefined) (u as any).is_active = cambios.is_active
 
     await u.save()
     return u
   }
 
+  // ===== Eliminar si no tiene historial, si no → inactivar =====
   async eliminarOInactivar(id_usuario: number) {
     const sesiones = await Sesion.query().where('id_usuario', id_usuario).limit(1)
     if (sesiones.length > 0) {

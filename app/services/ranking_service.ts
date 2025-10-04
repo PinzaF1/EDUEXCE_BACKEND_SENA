@@ -92,16 +92,36 @@ export default class RankingService {
 
     const filas: Fila[] = []
     for (const e of estudiantes) {
+      // 🔧 Tomamos SOLO sesiones cerradas (fin_at NOT NULL) dentro de los 30 días.
+      // Y traemos datos para recomputar el porcentaje si está nulo.
       const ses = await Sesion.query()
         .where('id_usuario', e.id_usuario)
         .where('inicio_at', '>=', desde as any)
-        .select(['puntaje_porcentaje'])
+        .whereNotNull('fin_at')
+        .select(['puntaje_porcentaje', 'correctas', 'total_preguntas'])
 
       if (!ses.length) continue
 
-      const avg = Math.round(
-        ses.reduce((a, b) => a + (Number((b as any).puntaje_porcentaje) || 0), 0) / ses.length
-      )
+      // 🔧 Calculamos el score por sesión:
+      // - Usa puntaje_porcentaje si viene.
+      // - Si está NULL, calcula con correctas/total_preguntas * 100.
+      const scores: number[] = []
+      for (const s of ses) {
+        const pctRaw = (s as any).puntaje_porcentaje
+        let pct = pctRaw != null ? Number(pctRaw) : null
+
+        if (pct == null) {
+          const correctas = Number((s as any).correctas ?? 0)
+          const total = Number((s as any).total_preguntas ?? 0)
+          pct = total > 0 ? Math.round((correctas / total) * 100) : 0
+        }
+
+        if (Number.isFinite(pct)) scores.push(Number(pct))
+      }
+
+      if (!scores.length) continue
+
+      const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
 
       const etiqueta =
         (e as any).nombre

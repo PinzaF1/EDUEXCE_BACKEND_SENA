@@ -1,4 +1,3 @@
-// app/controllers/admin_controller.ts
 import type { HttpContext } from '@adonisjs/core/http'
 import DashboardAdminService from '../services/dashboard_admin_service.js'
 import SeguimientoAdminService from '../services/seguimiento_admin_service.js'
@@ -13,9 +12,10 @@ const notificacionesService = new NotificacionesService()
 const perfilService = new PerfilService()
 
 class AdminController {
+  // ===== Dashboard / Seguimiento (móvil-web) =====
   public async dashboard({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
-    await notificacionesService.generarParaInstitucion(auth.id_institucion)
+    await notificacionesService.generarParaInstitucion(Number(auth.id_institucion))
     const data = await (dashboardService as any).resumen(Number(auth.id_institucion))
     return response.ok(data)
   }
@@ -65,34 +65,33 @@ class AdminController {
     }
   }
 
-  /** Importar estudiantes (multipart: archivo | JSON: { filas }) */
-public async importarEstudiantes(ctx: HttpContext) {
-  // 1) Intentar SIEMPRE por archivo primero (probamos todas las claves)
-  const f1 = ctx.request.file('estudiantes', { size: '20mb' })
-  const f2 = ctx.request.file('file', { size: '20mb' })
-  const f3 = ctx.request.file('archivo', { size: '20mb' })
+  /**
+   * Importar estudiantes:
+   *  - multipart: archivo (campo estudiantes | file | archivo)
+   *  - JSON: { filas: [...] } o { estudiantes: [...] }
+   */
+  public async importarEstudiantes(ctx: HttpContext) {
+    const f1 = ctx.request.file('estudiantes', { size: '20mb' })
+    const f2 = ctx.request.file('file', { size: '20mb' })
+    const f3 = ctx.request.file('archivo', { size: '20mb' })
+    if (f1 || f2 || f3) {
+      return (estudiantesService as any).subirCSV(ctx)
+    }
 
-  if (f1 || f2 || f3) {
-    return (estudiantesService as any).subirCSV(ctx)
+    const ct = String(ctx.request.header('content-type') || '').toLowerCase()
+    if (ct.includes('multipart/form-data')) {
+      return (estudiantesService as any).subirCSV(ctx)
+    }
+
+    const auth = (ctx.request as any).authUsuario
+    const body: any = ctx.request.body() || {}
+    const filas = Array.isArray(body.filas)
+      ? body.filas
+      : (Array.isArray(body.estudiantes) ? body.estudiantes : [])
+
+    const data = await estudiantesService.importarMasivo(Number(auth.id_institucion), filas)
+    return ctx.response.ok(data)
   }
-
-  // hay clientes (incluido Postman) que declaran multipart sin adjuntar nada:
-  const ct = String(ctx.request.header('content-type') || '').toLowerCase()
-  if (ct.includes('multipart/form-data')) {
-    // igual enviamos al flujo que ya maneja el error “Sube un CSV...”
-    return (estudiantesService as any).subirCSV(ctx)
-  }
-
-  // 2) Fallback JSON { filas: [...] }
-  const auth = (ctx.request as any).authUsuario
-  const body: any = ctx.request.body() || {}
-  const filas = Array.isArray(body.filas)
-    ? body.filas
-    : (Array.isArray(body.estudiantes) ? body.estudiantes : [])
-
-  const data = await estudiantesService.importarMasivo(Number(auth.id_institucion), filas)
-  return ctx.response.ok(data)
-}
 
   public async editarEstudiante({ request, response }: HttpContext) {
     const id = Number(request.param('id'))
@@ -130,8 +129,8 @@ public async importarEstudiantes(ctx: HttpContext) {
 
   public async generarNotificaciones({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
-    await (notificacionesService as any).generarParaInstitucion(Number(auth.id_institucion))
-    return response.ok({ ok: true })
+    const n = await (notificacionesService as any).generarParaInstitucion(Number(auth.id_institucion))
+    return response.ok({ ok: true, generadas: n })
   }
 
   public async marcarLeidas({ request, response }: HttpContext) {
@@ -172,125 +171,112 @@ public async importarEstudiantes(ctx: HttpContext) {
   }
 
   // ====== WEB: KPIs superiores (Promedio Actual, Mejora, Participando) ======
-public async webSeguimientoResumen({ request, response }: HttpContext) {
-  const auth = (request as any).authUsuario
-  const data = await (dashboardService as any).kpisResumen(Number(auth.id_institucion))
-  return response.ok(data)
-}
-
-
-public async webSeguimientoCursos({ request, response }: HttpContext) {
-  const auth = (request as any).authUsuario
-  // usa tu servicio correcto
-  const data = await (seguimientoService as any).comparativoPorCursos(Number(auth.id_institucion))
-  // adapta nombres para la UI (items + progreso)
-  const items = (Array.isArray(data) ? data : []).map((r: any) => ({
-    curso: String(r?.curso ?? ''),
-    estudiantes: Number(r?.estudiantes ?? 0),
-    promedio: Number(r?.promedio ?? 0),
-    progreso: Number(r?.progreso_pct ?? 0), // <- renombrado
-  }))
-  return response.ok({ items })
-}
-
-
-// ====== WEB: Áreas que necesitan refuerzo ======
-// AdminController.ts
-public async webAreasRefuerzo({ request, response }: HttpContext) {
-  const auth = (request as any).authUsuario
-  const q = request.qs() as any
-
-  const crit = Number(q.umbral ?? 60)
-  const aten = Number(q.umbral_atencion ?? 30)
-  const up   = Number(q.umbral_puntaje ?? 60)
-  const min  = Number(q.min_participantes ?? 5)
-
-  // usa el service correcto
-  const { areas } = await (seguimientoService as any).areasQueNecesitanRefuerzo(
-    Number(auth.id_institucion), crit, aten, up, min
-  )
-
-  // Mapea nombres a EXACTOS del frontend
-  const display: Record<string, string> = {
-    Matematicas: 'Matematicas',
-    Ingles: 'Ingles',
-    Lenguaje: 'Lectera Critica',       // <- así lo pinta tu FE
-    Ciencias: 'Ciencias Naturales',
-    Sociales: 'Sociales y Ciudadanas',
+  public async webSeguimientoResumen({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const data = await (dashboardService as any).kpisResumen(Number(auth.id_institucion))
+    return response.ok(data)
   }
 
-  // Orden opcional para que salgan como en tu UI
-  const ORDER = [
-    'Ciencias Naturales',
-    'Ingles',
-    'Lectera Critica',
-    'Matematicas',
-    'Sociales y Ciudadanas',
-  ]
+  // ====== WEB: Comparativo por cursos (promedio + progreso) ======
+  public async webSeguimientoCursos({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const data = await (seguimientoService as any).comparativoPorCursos(Number(auth.id_institucion))
+    const itemsSrc = Array.isArray(data) ? data : (Array.isArray((data as any).items) ? (data as any).items : [])
+    const items = itemsSrc.map((r: any) => ({
+      curso: String(r?.curso ?? ''),
+      estudiantes: Number(r?.estudiantes ?? 0),
+      promedio: Number(r?.promedio ?? 0),
+      progreso: Number(r?.progreso_pct ?? 0),
+    }))
+    return response.ok({ items })
+  }
 
-  const items = (areas as any[]).map(a => ({
-    // devolvemos "area" con la etiqueta EXACTA que espera tu FE
-    area: display[a.area] ?? a.area,
-    estado: a.estado,
-    porcentaje_bajo: Number(a.porcentaje_bajo ?? 0),
-    porcentaje: Number(a.porcentaje_bajo ?? 0),     // alias para FE
-    debajo_promedio: Number(a.debajo_promedio ?? 0),
-  }))
+  // ====== WEB: Áreas que necesitan refuerzo ======
+  public async webAreasRefuerzo({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const q = request.qs() as any
 
-  // ordenar como en tu tabla/barras
-  items.sort((x, y) => ORDER.indexOf(x.area) - ORDER.indexOf(y.area))
+    const crit = Number(q.umbral ?? 60)
+    const aten = Number(q.umbral_atencion ?? 30)
+    const up   = Number(q.umbral_puntaje ?? 60)
+    const min  = Number(q.min_participantes ?? 5)
 
-  return response.ok({ areas: items })
-}
+    const { areas } = await (seguimientoService as any).areasQueNecesitanRefuerzo(
+      Number(auth.id_institucion), crit, aten, up, min
+    )
 
+    const display: Record<string, string> = {
+      Matematicas: 'Matematicas',
+      Ingles: 'Ingles',
+      Lenguaje: 'Lectera Critica',
+      Ciencias: 'Ciencias Naturales',
+      Sociales: 'Sociales y Ciudadanas',
+    }
 
+    const ORDER = [
+      'Ciencias Naturales',
+      'Ingles',
+      'Lectera Critica',
+      'Matematicas',
+      'Sociales y Ciudadanas',
+    ]
 
-// ====== WEB: Estudiantes que requieren atención ======
-public async webEstudiantesAlerta({ request, response }: HttpContext) {
-  const auth = (request as any).authUsuario
-  const { umbral = 50, min_intentos = 2 } = request.qs() as any
-  const data = await (dashboardService as any).estudiantesAlerta(Number(auth.id_institucion), {
-    umbral: Number(umbral),
-    min_intentos: Number(min_intentos),
-  })
-  return response.ok(data)
-}
+    const items = (areas as any[]).map((a) => ({
+      area: display[a.area] ?? a.area,
+      estado: a.estado,
+      porcentaje_bajo: Number(a.porcentaje_bajo ?? 0),
+      porcentaje: Number(a.porcentaje_bajo ?? 0),
+      debajo_promedio: Number(a.debajo_promedio ?? 0),
+    }))
 
-// ====== WEB: Cards de estudiantes activos por área (mes actual) ======
-public async webAreasActivos({ request, response }: HttpContext) {
-  const auth = (request as any).authUsuario
-  const data = await (dashboardService as any).tarjetasPorArea(Number(auth.id_institucion))
-  // opcional: mismo formato de “islas” que usas en el resumen
-  const areas = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles'] as const
-  const islas = areas.map((area) => ({ area, activos: (data as any)[area] || 0 }))
-  return response.ok({ islas })
-}
+    items.sort((x, y) => ORDER.indexOf(x.area) - ORDER.indexOf(y.area))
 
-// ====== WEB: Serie Progreso por Área (últimos N meses) ======
-public async webSerieProgresoPorArea({ request, response }: HttpContext) {
-  const auth = (request as any).authUsuario
-  const meses = Number((request.qs() as any).meses ?? 6)
-  const series = await (dashboardService as any).progresoMensualPorArea(Number(auth.id_institucion), meses)
-  // aplanado para el gráfico de líneas
-  const flat = Object.entries(series).flatMap(([area, puntos]: any) =>
-    puntos.map((p: any) => ({ mes: p.mes, area, valor: p.promedio }))
-  )
-  return response.ok({ series: flat })
-}
+    return response.ok({ areas: items })
+  }
 
-// ====== WEB: Rendimiento por Área (mes actual) ======
-public async webRendimientoPorArea({ request, response }: HttpContext) {
-  const auth = (request as any).authUsuario
-  const now = new Date()
-  const rend = await (dashboardService as any).rendimientoDelMes(
-    Number(auth.id_institucion),
-    now.getFullYear(),
-    now.getMonth() + 1
-  )
-  const items = Object.entries(rend).map(([area, promedio]) => ({ area, promedio }))
-  return response.ok({ items })
-}
-  
+  // ====== WEB: Estudiantes que requieren atención ======
+  public async webEstudiantesAlerta({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const { umbral = 50, min_intentos = 2 } = request.qs() as any
+    const data = await (dashboardService as any).estudiantesAlerta(Number(auth.id_institucion), {
+      umbral: Number(umbral),
+      min_intentos: Number(min_intentos),
+    })
+    return response.ok(data)
+  }
+
+  // ====== WEB: Cards de estudiantes activos por área (mes actual) ======
+  public async webAreasActivos({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const data = await (dashboardService as any).tarjetasPorArea(Number(auth.id_institucion))
+    const areas = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles'] as const
+    const islas = areas.map((area) => ({ area, activos: (data as any)[area] || 0 }))
+    return response.ok({ islas })
+  }
+
+  // ====== WEB: Serie Progreso por Área (últimos N meses) ======
+  public async webSerieProgresoPorArea({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const meses = Number((request.qs() as any).meses ?? 6)
+    const series = await (dashboardService as any).progresoMensualPorArea(Number(auth.id_institucion), meses)
+    const flat = Object.entries(series).flatMap(([area, puntos]: any) =>
+      (puntos as any[]).map((p: any) => ({ mes: p.mes, area, valor: p.promedio }))
+    )
+    return response.ok({ series: flat })
+  }
+
+  // ====== WEB: Rendimiento por Área (mes actual) ======
+  public async webRendimientoPorArea({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const now = new Date()
+    const rend = await (dashboardService as any).rendimientoDelMes(
+      Number(auth.id_institucion),
+      now.getFullYear(),
+      now.getMonth() + 1
+    )
+    const items = Object.entries(rend).map(([area, promedio]) => ({ area, promedio }))
+    return response.ok({ items })
+  }
 }
 
 export default AdminController
