@@ -43,44 +43,68 @@ export default class AuthService {
   }
 
   // ESTUDIANTE: documento + contraseña (tabla usuarios)
-  async loginEstudiante(numero_documento: string, password: string) {
-    const est = await Usuario.findBy('numero_documento', String(numero_documento).trim())
-    if (!est || (est as any).rol !== 'estudiante') return null
-    if ((est as any).is_active === false) return null
 
-    const ok = await bcrypt.compare(password, (est as any).password_hash)
-    if (!ok) return null
+async loginEstudiante(numero_documento: string, password: string) {
+  console.log('Iniciando el login con el número de documento:', numero_documento);
+  
+  // Busca al estudiante por el número de documento
+  const est = await Usuario.findBy('numero_documento', String(numero_documento).trim());
+  console.log('Estudiante encontrado:', est);
 
-    // timestamps útiles para EP-06 (inactividad)
-    ;(est as any).last_login_at = DateTime.now()
-    ;(est as any).last_activity_at = DateTime.now()
-    await est.save()
-
-    const token = jwt.sign(
-      {
-        rol: 'estudiante',
-        id_usuario: (est as any).id_usuario,
-        id_institucion: (est as any).id_institucion ?? null,
-      },
-      SECRET,
-      { expiresIn: EXPIRES_IN }
-    )
-
-    return {
-      usuario: {
-        id_usuario: (est as any).id_usuario,
-        id_institucion: (est as any).id_institucion ?? null,
-        nombre: (est as any).nombre,
-        apellido: (est as any).apellido,
-        curso: (est as any).curso ?? null,
-        grado: (est as any).grado ?? null,
-        jornada: (est as any).jornada ?? null,
-        foto_url: (est as any).foto_url ?? null,
-      },
-      token,
-      token_type: 'Bearer',
-      expires_in: EXPIRES_IN,
-      issued_at: DateTime.now().toISO(),
-    }
+  if (!est || (est as any).rol !== 'estudiante') {
+    console.log('Estudiante no encontrado o el rol no es "estudiante"');
+    return null;
   }
+
+  // Si el estudiante está inactivo, retorna null
+  if ((est as any).is_active === false) {
+    console.log('El estudiante está inactivo');
+    return null;
+  }
+
+  // Compara la contraseña con la almacenada en la base de datos
+  const ok = await bcrypt.compare(password, (est as any).password_hash);
+  console.log('Contraseña comparada:', ok);
+
+  if (!ok) {
+    console.log('La contraseña es incorrecta');
+    return null;
+  }
+
+  // Actualiza los timestamps de actividad y último login
+  (est as any).last_login_at = DateTime.now();
+  (est as any).last_activity_at = DateTime.now();
+  await est.save();
+
+  console.log('Estudiante autenticado exitosamente, generando token');
+
+  // Genera el token JWT para la autenticación
+  const token = jwt.sign(
+    {
+      rol: 'estudiante',
+      id_usuario: (est as any).id_usuario,
+      id_institucion: (est as any).id_institucion ?? null,
+    },
+    SECRET,
+    { expiresIn: EXPIRES_IN }
+  );
+
+  // Retorna la información del estudiante junto con el token generado
+  return {
+    usuario: {
+      id_usuario: (est as any).id_usuario,
+      id_institucion: (est as any).id_institucion ?? null,
+      nombre: (est as any).nombre,
+      apellido: (est as any).apellido,
+      curso: (est as any).curso ?? null,
+      grado: (est as any).grado ?? null,
+      jornada: (est as any).jornada ?? null,
+      foto_url: (est as any).foto_url ?? null,
+    },
+    token,
+    token_type: 'Bearer',
+    expires_in: EXPIRES_IN,
+    issued_at: DateTime.now().toISO(),
+  };
+}
 }

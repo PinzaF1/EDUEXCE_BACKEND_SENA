@@ -53,26 +53,21 @@ function toLetter(value: any, total: number): string {
   // ya viene letra
   if (typeof value === 'string') {
     const v = value.trim().toUpperCase()
-    // "A", "B"... 
     if (letters.includes(v)) return v
-    // "1"..."6"
     const n = Number(v)
     if (Number.isFinite(n)) {
       if (n >= 1 && n <= max) return letters[n - 1]
       if (n >= 0 && n < max) return letters[n]
     }
-    // "OPCION_1", "ALTERNATIVA_2"...
     const m = v.match(/(\d+)/)
     if (m) {
       const n2 = Number(m[1])
       if (n2 >= 1 && n2 <= max) return letters[n2 - 1]
     }
-    // como último recurso, si es "C" o similar
     if (v.length === 1) return v
     return ''
   }
 
-  // número 0/1-based
   if (typeof value === 'number' && Number.isFinite(value)) {
     const n = value
     if (n >= 1 && n <= max) return letters[n - 1]
@@ -85,15 +80,15 @@ function toLetter(value: any, total: number): string {
 /** Lee el campo "correcta" de la pregunta del banco y lo normaliza a letra */
 function extractCorrectLetter(b: any, totalOpc: number): string {
   const rawCorrect =
-    b?.respuesta_correcta ?? 
-    b?.opcion_correcta ?? 
-    b?.correcta ?? 
-    b?.indice_correcto ?? 
+    b?.respuesta_correcta ??
+    b?.opcion_correcta ??
+    b?.correcta ??
+    b?.indice_correcto ??
     null
   return toLetter(rawCorrect, totalOpc)
 }
 
-/** UPSERT en progreso_nivel para aprender subtema→área por alumno */
+/** UPSERT en progreso_nivel para aprender subtema→área por alumno (SIN SQL crudo, SIN updateOrCreate) */
 async function upsertProgresoNivel(opts: {
   id_usuario: number
   area: string
@@ -102,18 +97,16 @@ async function upsertProgresoNivel(opts: {
   preguntas_por_intento?: number | null
 }) {
   const { id_usuario } = opts
-  const area = canonArea(opts.area) // normalizamos
+  const area = canonArea(opts.area) // normalizamos área
   const subtema = String(opts.subtema || '').trim()
-  const subtema_norm = norm(subtema)
   if (!area || !subtema) return
 
-  // ✅ Defaults para columnas NOT NULL
   const nivel = Number.isFinite(Number(opts.nivel_orden)) ? Number(opts.nivel_orden) : 1
-  const preguntas = Number.isFinite(Number(opts.preguntas_por_intento)) 
+  const preguntas = Number.isFinite(Number(opts.preguntas_por_intento))
     ? Number(opts.preguntas_por_intento)
     : 5
 
-  const payloadBase: any = {
+  const payload = {
     id_usuario,
     area,
     subtema,
@@ -122,13 +115,29 @@ async function upsertProgresoNivel(opts: {
   }
 
   try {
-    await ProgresoNivel.updateOrCreate(
-      { id_usuario, subtema },
-      { ...payloadBase, subtema_norm }
-    )
-  } catch {
-    // Fallback si la tabla no tiene subtema_norm
-    await ProgresoNivel.updateOrCreate({ id_usuario, subtema }, payloadBase)
+    // Buscar por la clave única real: (id_usuario, area, subtema)
+    const existing = await ProgresoNivel.query()
+      .where('id_usuario', id_usuario)
+      .andWhere('area', area)
+      .andWhere('subtema', subtema)
+      .first()
+
+    if (existing) {
+      await existing.merge(payload).save()
+    } else {
+      await ProgresoNivel.create(payload)
+    }
+  } catch (error: any) {
+    // fallback por si hay carrera: intenta actualizar sin romper
+    try {
+      await ProgresoNivel.query()
+        .where('id_usuario', id_usuario)
+        .andWhere('area', area)
+        .andWhere('subtema', subtema)
+        .update(payload)
+    } catch (_) {
+      // último recurso: silenciar para no lanzar 500 en el endpoint
+    }
   }
 }
 
@@ -159,6 +168,12 @@ export default class SesionesService {
     const area = String(d.area ?? '').trim()
     const subtema = String(d.subtema ?? '').trim()
     if (!area || !subtema) throw new Error('area y subtema son obligatorios')
+
+    // 🔒 cerrar cualquier sesión abierta del estudiante
+    await Sesion.query()
+      .where('id_usuario', d.id_usuario)
+      .whereNull('fin_at')
+      .update({ fin_at: DateTime.now() })
 
     // excluir preguntas de la última sesión del mismo subtema
     const prev = await Sesion.query()
@@ -273,16 +288,14 @@ export default class SesionesService {
       correctas: 0,
     } as any)
 
-    // 👉 Aprende subtema→área (con defaults para NOT NULL)
     await upsertProgresoNivel({
       id_usuario: d.id_usuario,
       area: d.area,
       subtema: d.subtema,
-      nivel_orden: d.nivel_orden,                                 // si viene null usará 1
-      preguntas_por_intento: (sesion as any).total_preguntas ?? 5, // si viene null usará 5
+      nivel_orden: d.nivel_orden,
+      preguntas_por_intento: (sesion as any).total_preguntas ?? 5,
     })
 
-    // detalle
     const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
     const rows = preguntas.map((p: any, i: number) => ({
       id_sesion,
@@ -308,7 +321,6 @@ export default class SesionesService {
   // ========= CERRAR SESIÓN =========
   async cerrarSesion(d: {
     id_sesion: number
-    // ahora acepta ambos formatos: por orden o por id_pregunta
     respuestas: Array<{
       orden?: number
       opcion?: string
@@ -326,7 +338,6 @@ export default class SesionesService {
       .where('id_sesion', (ses as any).id_sesion)
       .orderBy('orden', 'asc')
 
-    // Mapa id_pregunta -> orden para traducir cuando llegue id_pregunta
     const ordenDeId = new Map<number, number>()
     for (const det of detalles as any[]) {
       const idp = Number(det.id_pregunta)
@@ -334,7 +345,6 @@ export default class SesionesService {
       if (Number.isFinite(idp) && Number.isFinite(ord)) ordenDeId.set(idp, ord)
     }
 
-    // 🔧 Normalización a {orden, opcion, tiempo_empleado_seg}
     const respuestas = (Array.isArray(d.respuestas) ? d.respuestas : [])
       .map((r: any) => {
         if (r?.orden != null) {
@@ -359,7 +369,6 @@ export default class SesionesService {
       })
       .filter(Boolean) as Array<{ orden: number; opcion: string; tiempo_empleado_seg?: number | null }>
 
-    // Si no hay respuestas válidas, cerrar con 0
     if (respuestas.length === 0) {
       ;(ses as any).correctas = 0
       ;(ses as any).puntaje_porcentaje = 0
@@ -368,7 +377,6 @@ export default class SesionesService {
       return { aprueba: false, correctas: 0, puntaje: 0 }
     }
 
-    // Precalcular #opciones y letra correcta por id_pregunta
     const idsPreg = detalles.map((x: any) => Number(x.id_pregunta)).filter(Boolean)
     const banco = idsPreg.length ? await BancoPregunta.query().whereIn('id_pregunta', idsPreg) : []
 
@@ -391,13 +399,12 @@ export default class SesionesService {
       ;(det as any).tiempo_empleado_seg = r.tiempo_empleado_seg ?? null
       ;(det as any).respondida_at = DateTime.now()
 
-      // Tiempo por pregunta (si aplica)
       const limite = (det as any).tiempo_asignado_seg
       const excedioTiempo =
         limite != null && (r.tiempo_empleado_seg == null || r.tiempo_empleado_seg > limite)
 
       const idp = Number((det as any).id_pregunta)
-      const totalOpc = totalOpcDe.get(idp) ?? 4        // fallback seguro
+      const totalOpc = totalOpcDe.get(idp) ?? 4
       const correcta = (correctaDe.get(idp) || '') as string
       const marcada = toLetter(r.opcion, totalOpc)
 
@@ -418,7 +425,6 @@ export default class SesionesService {
     ;(ses as any).fin_at = DateTime.now()
     await ses.save()
 
-    // 👉 Refresca conocimiento de subtema→área (usa defaults si faltan)
     if ((ses as any).area && (ses as any).subtema) {
       await upsertProgresoNivel({
         id_usuario: (ses as any).id_usuario,
@@ -439,6 +445,9 @@ export default class SesionesService {
     const area = String(d.area ?? '').trim() as Area
     const subtemas = Array.isArray(d.subtemas) ? d.subtemas.filter(Boolean) : []
     const TARGET = 25
+
+    // 🔒 cerrar sesiones abiertas previas
+    await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
 
     const elegidas: any[] = []
     const ya = new Set<number>()
@@ -528,7 +537,6 @@ export default class SesionesService {
       correctas: 0,
     } as any)
 
-    // Aprende cada subtema usado (defaults seguros)
     for (const st of subtemas) {
       await upsertProgresoNivel({
         id_usuario: d.id_usuario,
@@ -562,12 +570,11 @@ export default class SesionesService {
     }
   }
 
-  // ========= CERRAR SESIÓN (SIMULACRO POR ÁREA) =========
+  // ========= CERRAR SIMULACRO =========
   async cerrarSesionSimulacro(d: {
     id_sesion: number
     respuestas: Array<{ orden: number; opcion: string; tiempo_empleado_seg?: number }>
   }) {
-    // Reutiliza la lógica robusta de cerrarSesion (incluye el fix)
     return this.cerrarSesion(d)
   }
 
@@ -577,6 +584,9 @@ export default class SesionesService {
     id_institucion,
   }: { id_usuario: number; id_institucion?: number | null }) {
     this.ensureDetalleTable()
+
+    // 🔒 cerrar cualquier sesión abierta previa
+    await Sesion.query().where('id_usuario', id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
 
     type AreaKey = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
     const AREAS: AreaKey[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']

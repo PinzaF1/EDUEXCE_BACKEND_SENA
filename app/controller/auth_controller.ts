@@ -23,20 +23,35 @@ class AuthController {
 
   // EP-09 (móvil): Login Estudiante
   public async loginEstudiante({ request, response }: HttpContext) {
-    try {
-      const numero_documento = String(request.input('numero_documento') || '').trim()
-      const password = String(request.input('password') || '')
-      if (!numero_documento || !password) {
-        return response.badRequest({ error: 'Documento y contraseña son obligatorios' })
-      }
+  try {
+    const numero_documento = String(request.input('numero_documento') || '').trim();
+    const password = String(request.input('password') || '');
+    
+    console.log('Datos de entrada:', { numero_documento, password });
 
-      const resultado = await authService.loginEstudiante(numero_documento, password)
-      if (!resultado) return response.unauthorized({ error: 'Credenciales inválidas' })
-      return response.ok(resultado)
-    } catch (e: any) {
-      return response.badRequest({ error: e.message || 'Error en el login' })
+    // Verificación de datos
+    if (!numero_documento || !password) {
+      console.log('Error: Documento o contraseña faltantes');
+      return response.badRequest({ error: 'Documento y contraseña son obligatorios' });
     }
+
+    // Llamado al servicio de login
+    const resultado = await authService.loginEstudiante(numero_documento, password);
+    console.log('Resultado del login:', resultado);
+
+    if (!resultado) {
+      console.log('Error: Credenciales inválidas');
+      return response.unauthorized({ error: 'Credenciales inválidas' });
+    }
+
+    // Retorna el resultado con el token
+    return response.ok(resultado);
+  } catch (e: any) {
+    console.log('Error al intentar hacer login:', e.message || 'Error en el login');
+    return response.badRequest({ error: e.message || 'Error en el login' });
   }
+}
+
 
   // EP-02: Recuperación ADMIN
   public async enviarRecoveryAdmin({ request, response }: HttpContext) {

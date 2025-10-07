@@ -284,31 +284,56 @@ class MovilController {
     return response.ok(data)
   }
 
-  // ============ RETOS 1v1 ============ 
+  public async listarOponentes({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const q = String(request.input('q') || '').trim() || undefined
+    console.log('[CTRL][listarOponentes] auth:', auth?.id_usuario, 'inst:', auth?.id_institucion, 'q:', q)
+
+    try {
+      const oponentes = await retosService.listarOponentes({
+        id_institucion: Number(auth.id_institucion),
+        solicitante_id: Number(auth.id_usuario),
+        q,
+      })
+      console.log('[CTRL][listarOponentes] total:', oponentes.length)
+      return response.ok({ oponentes })
+    } catch (err: any) {
+      console.error('[CTRL][listarOponentes][ERROR]:', err)
+      return response.internalServerError({ message: err?.message || 'Error al listar oponentes' })
+    }
+  }
+
+  /** POST /movil/retos  body: { area, oponente_id, cantidad? } */
   public async crearReto({ request, response }: HttpContext) {
     try {
       const auth = (request as any).authUsuario
-      const { cantidad, area } = request.only(['cantidad', 'area']) as any
-      if (!area) return response.badRequest({ message: 'El campo "area" es obligatorio.' })
+      const { area, oponente_id, cantidad } = request.only(['area', 'oponente_id', 'cantidad']) as any
+
+      if (!area)        return response.badRequest({ message: 'El campo "area" es obligatorio.' })
+      if (!oponente_id) return response.badRequest({ message: 'El campo "oponente_id" es obligatorio.' })
 
       const data = await retosService.crearReto({
         id_institucion: Number(auth.id_institucion),
         creado_por: Number(auth.id_usuario),
         cantidad: Number(cantidad ?? 25),
         area: String(area) as any,
+        oponente_id: Number(oponente_id),
       })
+
       return response.created(data)
     } catch (err: any) {
-      return response.internalServerError({ message: err?.message || 'Error al crear el reto' })
+      return response.internalServerError({
+        message: err?.message || 'Error al crear el reto',
+      })
     }
   }
 
-  /** HU-01: Aceptar reto (:id_reto) */
+  /** POST /movil/retos/:id_reto/aceptar */
   public async aceptarReto({ request, response }: HttpContext) {
     try {
       const auth = (request as any).authUsuario
       const idReto = Number(request.param('id_reto'))
-      if (!idReto) return response.badRequest({ message: 'id_reto inválido' })
+      if (!Number.isFinite(idReto)) return response.badRequest({ message: 'id_reto inválido' })
 
       const data = await retosService.aceptarReto(idReto, Number(auth.id_usuario))
       return response.ok(data)
@@ -317,7 +342,7 @@ class MovilController {
     }
   }
 
-  /** HU-02: Registrar respuestas cronometradas */
+  /** POST /movil/retos/ronda  body: { id_sesion, respuestas[{orden,opcion,tiempo_empleado_seg?}] } */
   public async responderRonda({ request, response }: HttpContext) {
     try {
       const { id_sesion, respuestas } = request.only(['id_sesion', 'respuestas']) as any
@@ -327,17 +352,19 @@ class MovilController {
         id_sesion: Number(id_sesion),
         respuestas: Array.isArray(respuestas) ? respuestas : [],
       })
+
       return response.ok(data)
     } catch (err: any) {
       return response.internalServerError({ message: err?.message || 'Error al registrar la ronda' })
     }
   }
 
-  /** HU-03: Estado del reto + ganador */
+  /** GET /movil/retos/:id_reto/estado */
   public async estadoReto({ request, response }: HttpContext) {
     try {
       const idReto = Number(request.param('id_reto'))
-      if (!idReto) return response.badRequest({ message: 'id_reto inválido' })
+      if (!Number.isFinite(idReto)) return response.badRequest({ message: 'id_reto inválido' })
+
       const data = await retosService.estadoReto(idReto)
       return response.ok(data)
     } catch (err: any) {

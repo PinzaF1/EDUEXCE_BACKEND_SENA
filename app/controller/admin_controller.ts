@@ -12,20 +12,6 @@ const notificacionesService = new NotificacionesService()
 const perfilService = new PerfilService()
 
 class AdminController {
-  // ===== Dashboard / Seguimiento (móvil-web) =====
-  public async dashboard({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    await notificacionesService.generarParaInstitucion(Number(auth.id_institucion))
-    const data = await (dashboardService as any).resumen(Number(auth.id_institucion))
-    return response.ok(data)
-  }
-
-  public async seguimiento({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const data = await (seguimientoService as any).resumenMensual(Number(auth.id_institucion))
-    return response.ok(data)
-  }
-
   // ===== Estudiantes =====
   public async listarEstudiantes({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
@@ -65,11 +51,6 @@ class AdminController {
     }
   }
 
-  /**
-   * Importar estudiantes:
-   *  - multipart: archivo (campo estudiantes | file | archivo)
-   *  - JSON: { filas: [...] } o { estudiantes: [...] }
-   */
   public async importarEstudiantes(ctx: HttpContext) {
     const f1 = ctx.request.file('estudiantes', { size: '20mb' })
     const f2 = ctx.request.file('file', { size: '20mb' })
@@ -170,14 +151,14 @@ class AdminController {
     return ok ? response.ok({ ok: true }) : response.badRequest({ error: 'No se pudo cambiar contraseña' })
   }
 
-  // ====== WEB: KPIs superiores (Promedio Actual, Mejora, Participando) ======
+  // ====== WEB: KPIs superiores ======
   public async webSeguimientoResumen({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const data = await (dashboardService as any).kpisResumen(Number(auth.id_institucion))
     return response.ok(data)
   }
 
-  // ====== WEB: Comparativo por cursos (promedio + progreso) ======
+  // ====== WEB: Comparativo por cursos ======
   public async webSeguimientoCursos({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const data = await (seguimientoService as any).comparativoPorCursos(Number(auth.id_institucion))
@@ -208,7 +189,7 @@ class AdminController {
     const display: Record<string, string> = {
       Matematicas: 'Matematicas',
       Ingles: 'Ingles',
-      Lenguaje: 'Lectera Critica',
+      Lenguaje: 'Lectura Critica',   // <-- corregido
       Ciencias: 'Ciencias Naturales',
       Sociales: 'Sociales y Ciudadanas',
     }
@@ -216,7 +197,7 @@ class AdminController {
     const ORDER = [
       'Ciencias Naturales',
       'Ingles',
-      'Lectera Critica',
+      'Lectura Critica',
       'Matematicas',
       'Sociales y Ciudadanas',
     ]
@@ -245,7 +226,7 @@ class AdminController {
     return response.ok(data)
   }
 
-  // ====== WEB: Cards de estudiantes activos por área (mes actual) ======
+  // ====== WEB: Cards de estudiantes activos por área (en vivo) ======
   public async webAreasActivos({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
     const data = await (dashboardService as any).tarjetasPorArea(Number(auth.id_institucion))

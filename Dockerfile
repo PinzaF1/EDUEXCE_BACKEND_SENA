@@ -1,4 +1,4 @@
-# ---------- deps ----------
+# depspliegue
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
@@ -16,7 +16,7 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-# Vars de runtime
+# Vars 
 ENV NODE_ENV=production
 ENV PORT=3333
 ENV HOST=0.0.0.0

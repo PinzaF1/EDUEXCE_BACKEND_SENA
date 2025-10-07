@@ -15,8 +15,7 @@ Route.post('auth/recovery/admin/restablecer', (ctx) => new AuthController().rest
 Route.post('auth/recovery/estudiante/enviar', (ctx) => new AuthController().enviarRecoveryEstudiante(ctx))
 Route.post('auth/recovery/estudiante/restablecer', (ctx) => new AuthController().restablecerEstudiante(ctx))
 
-// ADMIN web
-
+// ADMINISTRADOR
 Route.get('admin/estudiantes', (ctx) => new AdminController().listarEstudiantes(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/estudiantes', (ctx) => new AdminController().crearEstudiante(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/estudiantes/importar', (ctx) => new AdminController().importarEstudiantes(ctx)).use(onlyRol({ rol: 'administrador' }))
@@ -57,11 +56,13 @@ Route.get('movil/progreso/materias',  (ctx) => new MovilController().progresoPor
 Route.get('movil/progreso/historial', (ctx) => new MovilController().progresoHistorial(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/historial/:id_sesion', (ctx) => new MovilController().progresoHistorialDetalle(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
-//SEGUIMIENTO WEB
+//SEGUIMIENTO   WEB
 Route.get('web/seguimiento/resumen',            (ctx) => new AdminController().webSeguimientoResumen(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/cursos',             (ctx) => new AdminController().webSeguimientoCursos(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/areas-refuerzo',     (ctx) => new AdminController().webAreasRefuerzo(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/estudiantes-alerta', (ctx) => new AdminController().webEstudiantesAlerta(ctx)).use(onlyRol({ rol: 'administrador' }))
+
+//INICIO WEB
 Route.get('web/seguimiento/areas/activos',      (ctx) => new AdminController().webAreasActivos(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/series/progreso-por-area', (ctx) => new AdminController().webSerieProgresoPorArea(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/rendimiento-por-area',     (ctx) => new AdminController().webRendimientoPorArea(ctx)).use(onlyRol({ rol: 'administrador' }))
@@ -72,8 +73,16 @@ Route.get('movil/logros', (ctx) => new MovilController().misLogros(ctx)).use(onl
 Route.post('movil/logros/otorgar-area', (ctx) => new MovilController().otorgarInsigniaArea(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/logros/todos', (ctx) => new MovilController().logrosTodos(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
-// Retos 1 vs 1
-Route.post('movil/retos', (ctx) => new MovilController().crearReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
-Route.post('movil/retos/:id_reto/aceptar', (ctx) => new MovilController().aceptarReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
-Route.post('movil/retos/ronda', (ctx) => new MovilController().responderRonda(ctx)).use(onlyRol({ rol: 'estudiante' }))
-Route.get('movil/retos/:id_reto', (ctx) => new MovilController().estadoReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
+
+Route.group(() => {
+  Route.get('oponentes', (ctx) => new MovilController().listarOponentes(ctx))
+  Route.post('retos', (ctx) => new MovilController().crearReto(ctx))
+  Route.post('retos/:id_reto/aceptar', (ctx) => new MovilController().aceptarReto(ctx)).where('id_reto', /^[0-9]+$/)
+  Route.post('retos/ronda', (ctx) => new MovilController().responderRonda(ctx))
+  Route.get('retos/:id_reto/estado', (ctx) => new MovilController().estadoReto(ctx)).where('id_reto', /^[0-9]+$/)
+})
+.prefix('/movil')
+.use(onlyRol({ rol: 'estudiante' }))
+
+
+

@@ -14,9 +14,9 @@ export default class Reto extends BaseModel {
   @column() declare tipo: '1v1'|'curso'
   @column() declare area?: 'Matematicas'|'Lenguaje'|'Ciencias'|'Sociales'|'Ingles'
   @column() declare estado: 'pendiente'|'en_curso'|'finalizado'
-  @column() declare participantes_json: any
-  @column() declare resultados_json?: any
-  @column() declare reglas_json?: any
+   @column({ columnName: 'participantes_json' }) declare participantes_json: any
+  @column({ columnName: 'resultados_json'  }) declare resultados_json?: any
+  @column({ columnName: 'reglas_json'      }) declare reglas_json?: any
   @column() declare creado_por?: number
 
   @column.dateTime() declare createdAt: DateTime
