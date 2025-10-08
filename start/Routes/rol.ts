@@ -51,7 +51,7 @@ Route.post('movil/isla/simulacro/cerrar', (ctx) => new MovilController().islaSim
 Route.get('movil/isla/simulacro/:id_sesion/resumen', (ctx) => new MovilController().islaSimulacroResumen(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 // PROGRESO MOVIL
-Route.get('movil/progreso/resumen',   (ctx) => new MovilController().progresoGeneral(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/progreso/resumen',   (ctx) => new MovilController().progresoResumen(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/materias',  (ctx) => new MovilController().progresoPorMaterias(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/historial', (ctx) => new MovilController().progresoHistorial(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/progreso/historial/:id_sesion', (ctx) => new MovilController().progresoHistorialDetalle(ctx)).use(onlyRol({ rol: 'estudiante' }))
@@ -74,15 +74,17 @@ Route.post('movil/logros/otorgar-area', (ctx) => new MovilController().otorgarIn
 Route.get('movil/logros/todos', (ctx) => new MovilController().logrosTodos(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 
+
 Route.group(() => {
   Route.get('oponentes', (ctx) => new MovilController().listarOponentes(ctx))
   Route.post('retos', (ctx) => new MovilController().crearReto(ctx))
-  Route.post('retos/:id_reto/aceptar', (ctx) => new MovilController().aceptarReto(ctx)).where('id_reto', /^[0-9]+$/)
+  Route.post('retos/:id_reto/aceptar', (ctx) => new MovilController().aceptarReto(ctx))
   Route.post('retos/ronda', (ctx) => new MovilController().responderRonda(ctx))
-  Route.get('retos/:id_reto/estado', (ctx) => new MovilController().estadoReto(ctx)).where('id_reto', /^[0-9]+$/)
+  Route.get('retos/:id_reto/estado', (ctx) => new MovilController().estadoReto(ctx))
 })
 .prefix('/movil')
 .use(onlyRol({ rol: 'estudiante' }))
+
 
 
 

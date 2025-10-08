@@ -203,47 +203,35 @@ class MovilController {
   }
 
   // ================= PROGRESO =================
-  public async progresoGeneral({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario // viene del middleware onlyRol
-    const data = await progresoService.general(Number(auth.id_usuario ?? auth.id))
-    return response.ok(data)
-  }
+  // PROGRESO
+public async progresoResumen({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await progresoService.resumenGeneral(auth.id_usuario)
+  return response.ok(data)
+}
 
-  // GET mov/progreso/materias
-  public async progresoPorMaterias({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const data = await progresoService.porMaterias(Number(auth.id_usuario ?? auth.id))
-    return response.ok(data)
-  }
+public async progresoPorMaterias({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await progresoService.porMaterias(auth.id_usuario)
+  return response.ok(data)
+}
 
-  // GET mov/progreso/historial?page=&limit=
-  public async progresoHistorial({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const page = Number((request.qs() as any).page ?? 1)
-    const limit = Number((request.qs() as any).limit ?? 20)
-    const data = await progresoService.historialUsuario(Number(auth.id_usuario ?? auth.id), { page, limit })
-    return response.ok(data)
-  }
+public async progresoHistorial({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const { materia, page, limit, desde, hasta } = request.qs() as any
+  const data = await progresoService.historial(auth.id_usuario, {
+    materia, page: Number(page ?? 1), limit: Number(limit ?? 20), desde, hasta
+  })
+  return response.ok(data)
+}
 
-  // GET mov/progreso/historial/:id_sesion  (RESUMEN + datos para cabecera)
-  public async progresoHistorialDetalle({ request, response }: HttpContext) {
-    const id = Number(request.param('id_sesion'))
-    const data = await progresoService.detalleIntento(id)
-    if ((data as any).error) return response.notFound(data)
-    return response.ok(data)
-  }
-
-  // Si quieres habilitar también las pestañas "Preguntas" y "Análisis":
-  public async progresoHistorialPreguntas({ request, response }: HttpContext) {
-    const id = Number(request.param('id_sesion'))
-    const data = await progresoService.preguntasIntento(id)
-    return response.ok(data)
-  }
-  public async progresoHistorialAnalisis({ request, response }: HttpContext) {
-    const id = Number(request.param('id_sesion'))
-    const data = await progresoService.analisisIntento(id)
-    return response.ok(data)
-  }
+public async progresoHistorialDetalle({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const id_sesion = Number(request.param('id_sesion'))
+  const data = await progresoService.historialDetalle(auth.id_usuario, id_sesion)
+  if (!data) return response.notFound({ error: 'Simulacro no encontrado' })
+  return response.ok(data)
+}
 
   // ============ RANKING / LOGROS ============ 
   public async ranking({ request, response }: HttpContext) {
@@ -284,23 +272,18 @@ class MovilController {
     return response.ok(data)
   }
 
+    /*  RETOS 1 VS 1 */
+
   public async listarOponentes({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
-    const q = String(request.input('q') || '').trim() || undefined
-    console.log('[CTRL][listarOponentes] auth:', auth?.id_usuario, 'inst:', auth?.id_institucion, 'q:', q)
+    const q = String(request.input('q') || '').trim()
 
-    try {
-      const oponentes = await retosService.listarOponentes({
-        id_institucion: Number(auth.id_institucion),
-        solicitante_id: Number(auth.id_usuario),
-        q,
-      })
-      console.log('[CTRL][listarOponentes] total:', oponentes.length)
-      return response.ok({ oponentes })
-    } catch (err: any) {
-      console.error('[CTRL][listarOponentes][ERROR]:', err)
-      return response.internalServerError({ message: err?.message || 'Error al listar oponentes' })
-    }
+    const data = await retosService.listarOponentes({
+      id_institucion: Number(auth.id_institucion),
+      solicitante_id: Number(auth.id_usuario),
+      q,
+    })
+    return response.ok(data)
   }
 
   /** POST /movil/retos  body: { area, oponente_id, cantidad? } */
@@ -308,7 +291,6 @@ class MovilController {
     try {
       const auth = (request as any).authUsuario
       const { area, oponente_id, cantidad } = request.only(['area', 'oponente_id', 'cantidad']) as any
-
       if (!area)        return response.badRequest({ message: 'El campo "area" es obligatorio.' })
       if (!oponente_id) return response.badRequest({ message: 'El campo "oponente_id" es obligatorio.' })
 
@@ -319,12 +301,9 @@ class MovilController {
         area: String(area) as any,
         oponente_id: Number(oponente_id),
       })
-
-      return response.created(data)
+      return response.created(data) // incluye preguntas
     } catch (err: any) {
-      return response.internalServerError({
-        message: err?.message || 'Error al crear el reto',
-      })
+      return response.internalServerError({ message: err?.message || 'Error al crear el reto' })
     }
   }
 
@@ -336,7 +315,7 @@ class MovilController {
       if (!Number.isFinite(idReto)) return response.badRequest({ message: 'id_reto inválido' })
 
       const data = await retosService.aceptarReto(idReto, Number(auth.id_usuario))
-      return response.ok(data)
+      return response.ok(data) // incluye preguntas
     } catch (err: any) {
       return response.internalServerError({ message: err?.message || 'Error al aceptar el reto' })
     }
@@ -352,7 +331,6 @@ class MovilController {
         id_sesion: Number(id_sesion),
         respuestas: Array.isArray(respuestas) ? respuestas : [],
       })
-
       return response.ok(data)
     } catch (err: any) {
       return response.internalServerError({ message: err?.message || 'Error al registrar la ronda' })
@@ -371,6 +349,7 @@ class MovilController {
       return response.internalServerError({ message: err?.message || 'Error al consultar el estado del reto' })
     }
   }
+
 
   // ============ QUIZ INICIAL (DIAGNÓSTICO) ============ 
   public async quizInicialIniciar({ request, response }: HttpContext) {
