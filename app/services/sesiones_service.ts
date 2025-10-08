@@ -9,9 +9,8 @@ import { DateTime } from 'luxon'
 type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
 type RespCierre = { id_pregunta: number; respuesta: string }
 
-/* ====================== Helpers comunes ====================== */
+/* ====================== Helpers ====================== */
 
-// normaliza texto (sin acentos, trim, minúsculas)
 const norm = (s: string) =>
   String(s || '')
     .normalize('NFD')
@@ -19,7 +18,6 @@ const norm = (s: string) =>
     .trim()
     .toLowerCase()
 
-// nombre de área → tipo Area
 const canonArea = (s?: string | null): Area | null => {
   const t = norm(String(s || ''))
   if (!t) return null
@@ -27,13 +25,13 @@ const canonArea = (s?: string | null): Area | null => {
   if (t.startsWith('leng') || t.startsWith('lect')) return 'Lenguaje'
   if (t.startsWith('cien')) return 'Ciencias'
   if (t.startsWith('soci')) return 'Sociales'
+  if (t.startsWith(' ing')) return 'Ingles'
   if (t.startsWith('ing')) return 'Ingles'
   return null
 }
 
 const ABC = ['A', 'B', 'C', 'D', 'E', 'F']
 
-/** Asegura que devolvemos SIEMPRE un number >= 2 y <= 6 */
 function safeOpcCount(raw: any, fallback = 4): number {
   try {
     if (Array.isArray(raw)) return Math.max(2, Math.min(6, raw.length))
@@ -41,16 +39,14 @@ function safeOpcCount(raw: any, fallback = 4): number {
       const parsed = JSON.parse(String(raw))
       if (Array.isArray(parsed)) return Math.max(2, Math.min(6, parsed.length))
     }
-  } catch { /* ignore */ }
+  } catch {}
   return fallback
 }
 
-/** Convierte índice/valor a letra A..F en base al total */
 function toLetter(value: any, total: number): string {
   const max = Math.max(2, Math.min(6, Number(total) || 4))
   const letters = ABC.slice(0, max)
 
-  // ya viene letra
   if (typeof value === 'string') {
     const v = value.trim().toUpperCase()
     if (letters.includes(v)) return v
@@ -77,7 +73,6 @@ function toLetter(value: any, total: number): string {
   return ''
 }
 
-/** Lee el campo "correcta" de la pregunta del banco y lo normaliza a letra */
 function extractCorrectLetter(b: any, totalOpc: number): string {
   const rawCorrect =
     b?.respuesta_correcta ??
@@ -88,7 +83,6 @@ function extractCorrectLetter(b: any, totalOpc: number): string {
   return toLetter(rawCorrect, totalOpc)
 }
 
-/** UPSERT en progreso_nivel para aprender subtema→área por alumno (SIN SQL crudo, SIN updateOrCreate) */
 async function upsertProgresoNivel(opts: {
   id_usuario: number
   area: string
@@ -97,7 +91,7 @@ async function upsertProgresoNivel(opts: {
   preguntas_por_intento?: number | null
 }) {
   const { id_usuario } = opts
-  const area = canonArea(opts.area) // normalizamos área
+  const area = canonArea(opts.area)
   const subtema = String(opts.subtema || '').trim()
   if (!area || !subtema) return
 
@@ -115,7 +109,6 @@ async function upsertProgresoNivel(opts: {
   }
 
   try {
-    // Buscar por la clave única real: (id_usuario, area, subtema)
     const existing = await ProgresoNivel.query()
       .where('id_usuario', id_usuario)
       .andWhere('area', area)
@@ -127,30 +120,104 @@ async function upsertProgresoNivel(opts: {
     } else {
       await ProgresoNivel.create(payload)
     }
-  } catch (error: any) {
-    // fallback por si hay carrera: intenta actualizar sin romper
+  } catch {
     try {
       await ProgresoNivel.query()
         .where('id_usuario', id_usuario)
         .andWhere('area', area)
         .andWhere('subtema', subtema)
         .update(payload)
-    } catch (_) {
-      // último recurso: silenciar para no lanzar 500 en el endpoint
-    }
+    } catch {}
   }
 }
 
-/* ============================================================ */
+/* ====================== Service ====================== */
 
 export default class SesionesService {
   ia = new IaService()
 
-  /** Forzar tabla calificada para el detalle (sin tocar el modelo) */
   private ensureDetalleTable() {
     const expected = 'public.sesiones_detalles'
     if ((SesionDetalle as any).table !== expected) {
       (SesionDetalle as any).table = expected
+    }
+  }
+
+  // ===== Reutilización de sesión (slot único por combinación) =====
+  private applySlotWhere(q: ReturnType<typeof Sesion.query>, slot: {
+    id_usuario: number
+    area?: string | null
+    tipo?: string | null
+    nivel_orden?: number | null
+  }) {
+    q.where('id_usuario', slot.id_usuario)
+    if (slot.area === null) q.whereNull('area')
+    else if (slot.area !== undefined) q.where('area', slot.area)
+    if (slot.tipo === null) q.whereNull('tipo')
+    else if (slot.tipo !== undefined) q.where('tipo', slot.tipo)
+    if (slot.nivel_orden === null) q.whereNull('nivel_orden')
+    else if (slot.nivel_orden !== undefined) q.where('nivel_orden', slot.nivel_orden)
+    return q
+  }
+
+  private async upStartOrReuse(p: {
+    id_usuario: number
+    total_preguntas: number
+    area?: string | null
+    tipo?: string | null
+    nivel_orden?: number | null
+    modo?: string | null
+    subtema?: string | null
+    usa_estilo_kolb?: boolean
+  }) {
+    const now = DateTime.local()
+    let ses = await this.applySlotWhere(Sesion.query(), p).orderBy('inicio_at', 'desc').first()
+
+    if (ses) {
+      const id_sesion = Number((ses as any).id_sesion)
+      await SesionDetalle.query().where('id_sesion', id_sesion).delete()
+      ;(ses as any).modo = p.modo ?? 'estandar'
+      ;(ses as any).area = p.area ?? null
+      ;(ses as any).subtema = p.subtema ?? null
+      ;(ses as any).tipo = p.tipo ?? null
+      ;(ses as any).nivel_orden = p.nivel_orden ?? null
+      ;(ses as any).usa_estilo_kolb = !!p.usa_estilo_kolb
+      ;(ses as any).inicio_at = now
+      ;(ses as any).fin_at = null
+      ;(ses as any).total_preguntas = p.total_preguntas
+      ;(ses as any).correctas = 0
+      ;(ses as any).puntaje_porcentaje = null
+      await (ses as any).save()
+      return ses
+    }
+
+    ses = await Sesion.create({
+      id_usuario: p.id_usuario,
+      modo: p.modo ?? 'estandar',
+      area: p.area ?? null,
+      subtema: p.subtema ?? null,
+      tipo: p.tipo ?? null,
+      nivel_orden: p.nivel_orden ?? null,
+      usa_estilo_kolb: !!p.usa_estilo_kolb,
+      inicio_at: now,
+      total_preguntas: p.total_preguntas,
+      correctas: 0,
+      is_activa: true,
+    } as any)
+    return ses
+  }
+
+  private async upAttachPreguntas(id_sesion: number, preguntas: Array<any>) {
+    await SesionDetalle.query().where('id_sesion', id_sesion).delete()
+    let orden = 1
+    for (const p of preguntas || []) {
+      await SesionDetalle.create({
+        id_sesion,
+        id_pregunta: Number((p as any).id_pregunta) || null,
+        orden,
+        tiempo_asignado_seg: (p as any).time_limit_seconds ?? null,
+      } as any)
+      orden++
     }
   }
 
@@ -169,18 +236,16 @@ export default class SesionesService {
     const subtema = String(d.subtema ?? '').trim()
     if (!area || !subtema) throw new Error('area y subtema son obligatorios')
 
-    // 🔒 cerrar cualquier sesión abierta del estudiante
     await Sesion.query()
       .where('id_usuario', d.id_usuario)
       .whereNull('fin_at')
       .update({ fin_at: DateTime.now() })
 
-    // excluir preguntas de la última sesión del mismo subtema
     const prev = await Sesion.query()
       .where('id_usuario', d.id_usuario)
       .where('area', area)
       .where('subtema', subtema)
-      .orderBy('inicio_at', 'desc')
+      .orderBy('inicio_at', 'asc')
       .first()
 
     const excludeIds: number[] = []
@@ -189,16 +254,14 @@ export default class SesionesService {
       excludeIds.push(...detPrev.map((x) => Number((x as any).id_pregunta)).filter(Boolean))
     }
 
-    // estilo Kolb opcional
     let estilo_kolb: any = undefined
     try {
       if (d.usa_estilo_kolb) {
         const k = await EstilosAprendizaje.findBy('id_usuario', d.id_usuario)
         estilo_kolb = (k as any)?.estilo
       }
-    } catch { /* ignore */ }
+    } catch {}
 
-    // 1) IA
     let preguntas: any[] = await this.ia.generarPreguntas({
       area,
       subtemas: [subtema],
@@ -209,7 +272,6 @@ export default class SesionesService {
       excluir_ids: excludeIds,
     } as any)
 
-    // 2) Fallback banco
     if (!preguntas || preguntas.length === 0) {
       const yaTomadas = new Set<number>(excludeIds)
       const mapBanco = (rows: any[]) =>
@@ -274,19 +336,16 @@ export default class SesionesService {
       preguntas = mapBanco(agg.slice(0, 5))
     }
 
-    // crear sesión
-    const sesion = await Sesion.create({
+    const sesion = await this.upStartOrReuse({
       id_usuario: d.id_usuario,
-      tipo: 'practica',
-      modo: 'estandar',
       area,
+      tipo: 'practica',
+      nivel_orden: d.nivel_orden ?? null,
       subtema,
-      usa_estilo_kolb: !!d.usa_estilo_kolb,
-      nivel_orden: d.nivel_orden,
-      inicio_at: DateTime.now(),
       total_preguntas: preguntas.length,
-      correctas: 0,
-    } as any)
+      modo: 'estandar',
+      usa_estilo_kolb: !!d.usa_estilo_kolb,
+    })
 
     await upsertProgresoNivel({
       id_usuario: d.id_usuario,
@@ -296,14 +355,7 @@ export default class SesionesService {
       preguntas_por_intento: (sesion as any).total_preguntas ?? 5,
     })
 
-    const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
-    const rows = preguntas.map((p: any, i: number) => ({
-      id_sesion,
-      id_pregunta: p.id_pregunta ?? null,
-      orden: i + 1,
-      tiempo_asignado_seg: (p as any).time_limit_seconds ?? null,
-    }))
-    await SesionDetalle.createMany(rows as any)
+    await this.upAttachPreguntas(Number((sesion as any).id_sesion), preguntas)
 
     return {
       sesion,
@@ -446,7 +498,6 @@ export default class SesionesService {
     const subtemas = Array.isArray(d.subtemas) ? d.subtemas.filter(Boolean) : []
     const TARGET = 25
 
-    // 🔒 cerrar sesiones abiertas previas
     await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
 
     const elegidas: any[] = []
@@ -464,7 +515,7 @@ export default class SesionesService {
         const id = Number((p as any).id_pregunta)
         if (!ya.has(id) && elegidas.length < TARGET) { ya.add(id); elegidas.push(p) }
       }
-    } catch { /* ignore */ }
+    } catch {}
 
     const faltan = () => TARGET - elegidas.length
     const toMapped = (r: any) => ({
@@ -526,16 +577,16 @@ export default class SesionesService {
       }
     }
 
-    const sesion = await Sesion.create({
+    const sesion = await this.upStartOrReuse({
       id_usuario: d.id_usuario,
-      tipo: 'simulacro',
-      modo: 'estandar',
       area,
-      usa_estilo_kolb: false,
-      inicio_at: DateTime.now(),
+      tipo: 'simulacro',
+      nivel_orden: null,
+      subtema: null,
       total_preguntas: elegidas.length,
-      correctas: 0,
-    } as any)
+      modo: 'estandar',
+      usa_estilo_kolb: false,
+    })
 
     for (const st of subtemas) {
       await upsertProgresoNivel({
@@ -547,14 +598,7 @@ export default class SesionesService {
       })
     }
 
-    const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
-    const rows = elegidas.map((p: any, i: number) => ({
-      id_sesion,
-      id_pregunta: p.id_pregunta ?? null,
-      orden: i + 1,
-      tiempo_asignado_seg: null,
-    }))
-    await SesionDetalle.createMany(rows as any)
+    await this.upAttachPreguntas(Number((sesion as any).id_sesion), elegidas)
 
     return {
       sesion,
@@ -585,7 +629,6 @@ export default class SesionesService {
   }: { id_usuario: number; id_institucion?: number | null }) {
     this.ensureDetalleTable()
 
-    // 🔒 cerrar cualquier sesión abierta previa
     await Sesion.query().where('id_usuario', id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
 
     type AreaKey = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
@@ -602,24 +645,20 @@ export default class SesionesService {
       pack.push(...lote)
     }
 
-    const sesion = await Sesion.create({
+    const sesion = await this.upStartOrReuse({
       id_usuario,
+      area: null,
       tipo: 'diagnostico',
-      modo: 'estandar',
-      inicio_at: DateTime.now(),
+      nivel_orden: null,
+      subtema: null,
       total_preguntas: pack.length,
-      correctas: 0,
-    } as any)
+      modo: 'estandar',
+      usa_estilo_kolb: false,
+    })
 
-    const id_sesion = (sesion as any).id_sesion ?? sesion.id_sesion
-    const rows = pack.map((p: any, i: number) => ({
-      id_sesion,
-      id_pregunta: p.id_pregunta,
-      orden: i + 1,
-      tiempo_asignado_seg: null,
-    }))
-    await SesionDetalle.createMany(rows as any)
+    await this.upAttachPreguntas(Number((sesion as any).id_sesion), pack)
 
+    const id_sesion = Number((sesion as any).id_sesion)
     return {
       id_sesion,
       preguntas: pack.map((p: any) => ({

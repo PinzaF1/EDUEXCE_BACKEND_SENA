@@ -1,95 +1,153 @@
 // app/services/progreso_service.ts
-import Sesion from '../models/sesione.js'
-import ProgresoNivel from '../models/progreso_nivel.js'
+import Sesion from '../models/sesione.js'            
+import ProgresoNivel from '../models/progreso_nivel.js' 
 
-type Area = 'Matematicas'|'Lenguaje'|'Ciencias'|'Sociales'|'Ingles'
-const AREAS: Area[] = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles']
+// ===== ÁREAS y normalizadores =====
+export type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
+const AREAS: Area[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'Sociales', 'Ingles']
 
-// ===== Helpers locales =====
+const norm = (s: string) =>
+  String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+
+// normaliza nombres de área (con/sin acentos)
+const toArea = (raw?: string | null): Area | null => {
+  const s = norm(String(raw || ''))
+  if (!s) return null
+  if (s.startsWith('matem')) return 'Matematicas'
+  if (s.startsWith('leng') || s.includes('lectura') || s.includes('critica') || s.includes('critico')) return 'Lenguaje'
+  if (s.startsWith('cien') || s.includes('natur')) return 'Ciencias'
+  if (s.startsWith('socia') || s.includes('ciudada') || s.includes('hist') || s.includes('geogra') || s.includes('econ')) return 'Sociales'
+  if (s.startsWith('ingl')) return 'Ingles'
+  return null
+}
+
+// heurística por subtema cuando el área viene null
+const subtemaToArea = (raw?: string | null): Area | null => {
+  const s = norm(String(raw || ''))
+  if (!s) return null
+  if (s.includes('arit') || s.includes('alge') || s.includes('geome') || s.includes('estad') || s.includes('funci')) return 'Matematicas'
+  if (s.includes('lectur') || s.includes('comprens') || s.includes('gramat') || s.includes('texto')) return 'Lenguaje'
+  if (s.includes('cienc') || s.includes('biolo') || s.includes('quimi') || s.includes('fisic') || s.includes('natur')) return 'Ciencias'
+  if (s.includes('social') || s.includes('ciudada') || s.includes('hist') || s.includes('geogra') || s.includes('econ')) return 'Sociales'
+  if (s.includes('ingl')) return 'Ingles'
+  return null
+}
+
+// porcentaje como coalesce(puntaje_porcentaje, correctas/total)
+const scoreOf = (x: any): number => {
+  const p = Number(x?.puntaje_porcentaje)
+  if (!Number.isNaN(p) && p > 0) return Math.round(p)
+  const tot = Number(x?.total_preguntas || 0)
+  const ok  = Number(x?.correctas || 0)
+  return tot > 0 ? Math.round((ok * 100) / tot) : 0
+}
+
+const toISO = (d: any): string | null => {
+  if (!d) return null
+  // Luxon DateTime
+  if (typeof d?.toISO === 'function') return d.toISO()
+  // JS Date
+  try { return new Date(d).toISOString() } catch { return null }
+}
+
 const nivelDe = (p: number) =>
   p >= 91 ? 'Experto' : p >= 76 ? 'Avanzado' : p >= 51 ? 'Intermedio' : 'Básico'
 
 const etiquetaDe = (p: number) =>
   p >= 75 ? 'Excelente' : p >= 60 ? 'Buen progreso' : 'Necesita mejorar'
 
-// normaliza: quita acentos, trim y minúsculas
-const norm = (s: string) =>
-  String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase()
-
-// construye mapa subtema → área con claves normalizadas (del usuario)
-async function buildAreaBySubtemaMap(id_usuario: number) {
+// ------- helpers extra: mapa subtema->area desde progreso_nivel -------
+const buildAreaBySubtemaMap = async (id_usuario: number) => {
   const rows = await ProgresoNivel.query().where('id_usuario', id_usuario)
   const map = new Map<string, Area>()
   for (const r of rows) {
     const sub = norm((r as any).subtema || '')
-    const ar  = (r as any).area as Area
+    const ar  = toArea((r as any).area)
     if (sub && ar && !map.has(sub)) map.set(sub, ar)
   }
   return map
 }
 
-// obtiene área de la sesión o la infiere por subtema usando el mapa
-function getAreaFromSesionOrMap(s: any, areaBySubtema: Map<string, Area>): Area | null {
-  if (s.area) return s.area as Area
-  const sub = norm(String(s.subtema || ''))
-  return (areaBySubtema.get(sub) as Area | undefined) ?? null
+const getAreaFromSesion = (row: any, map: Map<string, Area>): Area | null => {
+  return toArea(row.area) ?? map.get(norm(row.subtema || '')) ?? subtemaToArea(row.subtema)
 }
 
 export default class ProgresoService {
   /**
    * Base: calcula promedios, arma historial y niveles.
-   * Ahora convierte fechas a ISO y usa progreso_nivel para inferir áreas cuando vienen null.
+   * - solo usa sesiones CERRADAS (fin_at no null)
+   * - si el área viene null la infiere con subtema / progreso_nivel
+   * - calcula el puntaje con puntaje_porcentaje o correctas/total
    */
   async resumenEstudiante(id_usuario: number) {
     const ses = await Sesion.query()
       .where('id_usuario', id_usuario)
+      .whereNotNull('fin_at')                // <<< clave: solo cerradas
       .orderBy('inicio_at', 'desc')
 
-    if (!ses.length) return { porcentaje_global: 0, por_area: {}, simulacros: [], niveles: [] }
-
-    // mapa subtema → área (fallback)
-    const areaBySubtema = await buildAreaBySubtemaMap(id_usuario)
-
-    // ----- promedios por área (considera fallback) -----
-    const por_area: Record<Area, number> = { Matematicas:0, Lenguaje:0, Ciencias:0, Sociales:0, Ingles:0 }
-    for (const a of AREAS) {
-      const s = ses.filter(x => {
-        const area = getAreaFromSesionOrMap(x as any, areaBySubtema)
-        return area === a && (x as any).puntaje_porcentaje != null
-      })
-      por_area[a] = s.length
-        ? Math.round(s.reduce((acc,b)=> acc + ((b as any).puntaje_porcentaje||0),0)/s.length)
-        : 0
+    if (!ses.length) {
+      return { porcentaje_global: 0, por_area: {}, simulacros: [], niveles: [] }
     }
-    const global = Math.round(Object.values(por_area).reduce((a,b)=> a+b, 0)/AREAS.length)
 
-    // ----- historial de simulacros (solo los que conocemos el área) -----
+    const sub2area = await buildAreaBySubtemaMap(id_usuario)
+
+    // buckets para promediar por área
+    const buckets: Record<Area, number[]> = {
+      Matematicas: [], Lenguaje: [], Ciencias: [], Sociales: [], Ingles: [],
+    }
+
+    for (const s of ses) {
+      const row: any = s
+      const area = getAreaFromSesion(row, sub2area)
+      if (!area) continue
+
+      const puntaje = scoreOf(row)
+      buckets[area].push(puntaje)
+    }
+
+    const avg = (arr: number[]) =>
+      arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0
+
+    const por_area = {
+      Matematicas: avg(buckets.Matematicas),
+      Lenguaje:    avg(buckets.Lenguaje),
+      Ciencias:    avg(buckets.Ciencias),
+      Sociales:    avg(buckets.Sociales),
+      Ingles:      avg(buckets.Ingles),
+    }
+
+    const global = Math.round(
+      (por_area.Matematicas + por_area.Lenguaje + por_area.Ciencias + por_area.Sociales + por_area.Ingles) / AREAS.length
+    )
+
+    // historial (todas las cerradas; si quieres solo simulacro, filtra por tipo)
     const simulacros = ses
-      .filter(x => String((x as any).tipo).toLowerCase() === 'simulacro')
-      .map(x => {
-        const area = getAreaFromSesionOrMap(x as any, areaBySubtema)
-        return {
-          id_sesion: (x as any).id_sesion,
-          area, // puede ser null aquí, lo filtramos abajo
-          puntaje: (x as any).puntaje_porcentaje || 0,
-          fecha: ((x as any).fin_at?.toISO?.() || (x as any).inicio_at?.toISO?.() || null),
-        }
-      })
-      .filter(s => !!s.area) // descartamos los que aún no se pueden inferir
+      .map((x: any) => ({
+        id_sesion: x.id_sesion,
+        area: getAreaFromSesion(x, sub2area),
+        puntaje: scoreOf(x),
+        fecha: toISO(x.fin_at) || toISO(x.inicio_at),
+        tipo: x.tipo || null,
+      }))
+      .filter((s: { area: any }) => !!s.area)
 
-    // ----- línea de niveles (orden ascendente por nivel_orden) -----
+    // timeline de niveles (si manejas nivel_orden)
     const niveles = ses
-      .filter(x => (x as any).nivel_orden != null)
-      .sort((a,b)=> ((a as any).nivel_orden||0) - ((b as any).nivel_orden||0))
-      .map(x => ({
-        area: getAreaFromSesionOrMap(x as any, areaBySubtema),
-        nivel: (x as any).nivel_orden
+      .filter((x: any) => x.nivel_orden != null)
+      .sort((a: any, b: any) => (a.nivel_orden || 0) - (b.nivel_orden || 0))
+      .map((x: any) => ({
+        area: getAreaFromSesion(x, sub2area),
+        nivel: x.nivel_orden,
       }))
 
     return { porcentaje_global: global, por_area, simulacros, niveles }
   }
 
-  /** Pestaña: General */
+  /** Resumen general para la pestaña “General” */
   async resumenGeneral(id_usuario: number) {
     const base = await this.resumenEstudiante(id_usuario)
     const pg = Number(base.porcentaje_global || 0)
@@ -118,46 +176,68 @@ export default class ProgresoService {
     return { materias }
   }
 
-  /** Pestaña: Historial (lista con filtros/paginación) */
-  async historial(
-    id_usuario: number,
-    opts?: { materia?: string; page?: number; limit?: number; desde?: string; hasta?: string }
-  ) {
-    const { materia, page = 1, limit = 20, desde, hasta } = opts || {}
-    const base = await this.resumenEstudiante(id_usuario)
+  /** Historial (lista con filtros/paginación) */
+  /** Historial (solo el ÚLTIMO intento por materia y por tipo) */
+async historial(
+  id_usuario: number,
+  opts?: { materia?: string; page?: number; limit?: number; desde?: string; hasta?: string; tipo?: string }
+) {
+  const { materia, page = 1, limit = 20, desde, hasta, tipo } = opts || {}
+  const base = await this.resumenEstudiante(id_usuario)
 
-    let items = (base.simulacros || []).map((s: any) => ({
-      id_sesion: s.id_sesion,
-      materia: s.area, // ya no debería ser null (filtrado arriba)
-      porcentaje: Number(s.puntaje || 0),
-      nivel: nivelDe(Number(s.puntaje || 0)),
-      fecha: s.fecha,
-    }))
+  // Pasamos todo a un formato común
+  let items = (base.simulacros || []).map((s: any) => ({
+    id_sesion: s.id_sesion,
+    materia: s.area,
+    porcentaje: Number(s.puntaje || 0),
+    nivel: ((): string => {
+      const p = Number(s.puntaje || 0)
+      return p >= 91 ? 'Experto' : p >= 76 ? 'Avanzado' : p >= 51 ? 'Intermedio' : 'Básico'
+    })(),
+    tipo: s.tipo || null,
+    fecha: s.fecha,
+  }))
 
-    if (materia) items = items.filter(i => String(i.materia).toLowerCase() === String(materia).toLowerCase())
-    if (desde)   items = items.filter(i => new Date(i.fecha) >= new Date(desde))
-    if (hasta)   items = items.filter(i => new Date(i.fecha) <= new Date(hasta))
+  // Filtros (antes de agrupar)
+  const norm = (x: any) => String(x ?? '').trim().toLowerCase()
+  if (materia) items = items.filter((i) => norm(i.materia) === norm(materia))
+  if (tipo)    items = items.filter((i) => norm(i.tipo) === norm(tipo))
+  if (desde)   items = items.filter((i) => new Date(i.fecha) >= new Date(desde))
+  if (hasta)   items = items.filter((i) => new Date(i.fecha) <= new Date(hasta))
 
-    items.sort((a,b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())
-
-    const p = Math.max(1, Number(page))
-    const l = Math.max(1, Math.min(100, Number(limit)))
-    const start = (p - 1) * l
-
-    return {
-      items: items.slice(start, start + l).map(i => ({
-        intentoId: i.id_sesion,
-        materia: i.materia,
-        porcentaje: i.porcentaje,
-        nivel: i.nivel,
-        fecha: i.fecha,
-        detalleDisponible: true
-      })),
-      page: p,
-      limit: l,
-      total: items.length
+  // Nos quedamos SOLO con el último por (materia + tipo)
+  const ultimoPorClave = new Map<string, typeof items[number]>()
+  for (const it of items) {
+    const clave = `${it.materia}|${it.tipo ?? ''}`
+    const prev = ultimoPorClave.get(clave)
+    if (!prev || new Date(it.fecha) > new Date(prev.fecha)) {
+      ultimoPorClave.set(clave, it)
     }
   }
+  items = Array.from(ultimoPorClave.values())
+
+  // Orden y paginación
+  items.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())
+  const p = Math.max(1, Number(page))
+  const l = Math.max(1, Math.min(100, Number(limit)))
+  const start = (p - 1) * l
+
+  return {
+    items: items.slice(start, start + l).map((i) => ({
+      intentoId: i.id_sesion,
+      materia: i.materia,
+      porcentaje: i.porcentaje,
+      nivel: i.nivel,
+      tipo: i.tipo,
+      fecha: i.fecha,
+      detalleDisponible: true,
+    })),
+    page: p,
+    limit: l,
+    total: items.length,
+  }
+}
+
 
   /** Historial (detalle de un intento) */
   async historialDetalle(id_usuario: number, id_sesion: number) {
@@ -167,26 +247,21 @@ export default class ProgresoService {
       .first()
 
     if (!ses) return null
+    const row: any = ses
 
-    // inferir área si viene null
-    let materia = (ses as any).area || null
-    if (!materia) {
-      const map = await buildAreaBySubtemaMap(id_usuario)
-      materia = getAreaFromSesionOrMap(ses as any, map)
-    }
-
-    const total = Number((ses as any).total_preguntas || 0)
-    const correctas = Number((ses as any).correctas || 0)
-    const porcentaje = (ses as any).puntaje_porcentaje != null
-      ? Number((ses as any).puntaje_porcentaje)
-      : (total > 0 ? Math.round((correctas / total) * 100) : 0)
+    const sub2area = await buildAreaBySubtemaMap(id_usuario)
+    const materia = getAreaFromSesion(row, sub2area)
+    const total = Number(row.total_preguntas || 0)
+    const correctas = Number(row.correctas || 0)
+    const porcentaje = scoreOf(row)
 
     return {
-      intentoId: (ses as any).id_sesion,
-      materia, // ya no debe ser null si hay match en progreso_nivel
+      intentoId: row.id_sesion,
+      materia,
       porcentaje,
       nivel: nivelDe(porcentaje),
-      fecha: ((ses as any).fin_at?.toISO?.() || (ses as any).inicio_at?.toISO?.() || null),
+      tipo: row.tipo || null,
+      fecha: toISO(row.fin_at) || toISO(row.inicio_at),
       preguntas: {
         total,
         correctas,

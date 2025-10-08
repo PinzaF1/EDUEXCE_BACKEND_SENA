@@ -18,16 +18,26 @@ const retosService = new RetosService()
 
 class MovilController {
   // ================= PERFIL =================
-  async perfilEstudiante({ request, response }: HttpContext) {
-    const authHeader = request.header('Authorization')
-    if (!authHeader) return response.unauthorized({ error: 'Token obligatorio' })
-    const token = authHeader.replace('Bearer ', '').trim()
+  public async perfilEstudiante({ request, response }: HttpContext) {
+    const authHeader = request.header('authorization') || ''
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+    const data = await estudiantesService.perfilDesdeToken(token)
+    if ((data as any).error) return response.unauthorized(data)
+    return response.ok(data)
+  }
 
+  public async actualizarPerfilContacto({ request, response }: HttpContext) {
     try {
-      const resultado = await estudiantesService.perfilEstudiante(token)
-      return response.ok(resultado)
+      const auth = (request as any).authUsuario
+      const { correo, telefono, direccion } = request.only(['correo', 'telefono', 'direccion'])
+      const data = await estudiantesService.actualizarContacto(Number(auth.id_usuario), {
+        correo,
+        telefono,
+        direccion,
+      })
+      return response.ok(data)
     } catch (e: any) {
-      return response.unauthorized({ error: e?.message || 'Token inválido' })
+      return response.badRequest({ error: e?.message || 'No se pudo actualizar' })
     }
   }
 
@@ -83,9 +93,7 @@ class MovilController {
 
   public async cerrarSesion({ request, response }: HttpContext) {
     try {
-      // Acepta ambos formatos:
-      // - [{ orden, opcion, tiempo_empleado_seg? }]
-      // - [{ id_pregunta, respuesta?|seleccion?|opcion?|alternativa?, tiempo_empleado_seg? }]
+     
       const body = request.only(['id_sesion', 'respuestas']) as any
       const id_sesion = Number(body.id_sesion)
       if (!id_sesion) return response.badRequest({ error: 'id_sesion es obligatorio' })

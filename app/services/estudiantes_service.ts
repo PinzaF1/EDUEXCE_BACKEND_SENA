@@ -51,6 +51,8 @@ export default class EstudiantesService {
     return `${numero_documento}${(apellido || '').toLowerCase().slice(-3)}`
   }
 
+  
+
   // ===== Crear/actualizar 1 estudiante (admin) =====
   async crearUno(d: {
     id_institucion: number
@@ -140,9 +142,7 @@ export default class EstudiantesService {
         grado: payload.grado,
         curso: payload.curso,
         jornada: payload.jornada,
-        is_active: true,
-        created_at: (u as any).created_at,
-        updated_at: (u as any).updated_at,
+        is_active: true
       },
     }
   }
@@ -484,96 +484,106 @@ export default class EstudiantesService {
     return await q.orderBy('apellido', 'asc').orderBy('nombre', 'asc')
   }
 
-  /** ====== Perfil estudiante desde token ====== */
-  async perfilEstudiante(token: string) {
-    try {
-      const payload: any = jwt.verify(token, SECRET)
+    // GET /estudiante/perfil (por token)
+async perfilDesdeToken(token: string) {
+  try {
+    const payload: any = jwt.verify(token, SECRET)
 
-      const rol = String(payload?.rol ?? '').toLowerCase()
-      const esEst =
-        rol === 'estudiante' ||
-        rol === 'usuario' ||
-        rol === 'student' ||
-        rol === 'user'
+    const rol = String(payload?.rol ?? '').toLowerCase()
+    const esEst = rol === 'estudiante' || rol === 'usuario' || rol === 'student' || rol === 'user'
+    if (!esEst) return { error: 'No autorizado: el token no corresponde a un estudiante' }
 
-      if (!esEst) {
-        return { error: 'No autorizado, el token no corresponde a un estudiante' }
-      }
+    const idUsuario = payload.id_usuario ?? payload.id ?? payload.user_id ?? payload.userId
+    if (!idUsuario) return { error: 'Token sin identificador de usuario' }
 
-      const idUsuario =
-        payload.id_usuario ?? payload.id ?? payload.user_id ?? payload.userId
+    const u = await Usuario.query()
+      .where('id_usuario', Number(idUsuario))
+      .preload('institucion', (q) => q.select(['id_institucion', 'nombre_institucion']))
+      .first()
 
-      if (!idUsuario) {
-        return { error: 'Token sin identificador de usuario' }
-      }
+    if (!u) return { error: 'Perfil no encontrado' }
 
-      const est = await Usuario.findBy('id_usuario', idUsuario)
-      if (!est) return { error: 'Perfil no encontrado' }
-
-      if (String((est as any).rol ?? '').toLowerCase() !== 'estudiante') {
-        return { error: 'El usuario no es de tipo estudiante' }
-      }
-
-      return {
-        nombre_usuario:   est.nombre ?? null,
-        apellido:         est.apellido ?? null,
-        numero_documento: est.numero_documento ?? payload.documento ?? null,
-        grado:            est.grado ?? null,
-        curso:            est.curso ?? null,
-        jornada:          est.jornada ?? null,
-        correo:           est.correo ?? null,
-      }
-    } catch {
-      return { error: 'Token INVÁLIDO o expirado' }
+    return {
+      id_usuario:          (u as any).id_usuario,
+      nombre_institucion:  (u as any).institucion?.nombre_institucion ?? null, // ← aquí el nombre
+      nombre:              (u as any).nombre ?? null,
+      apellido:            (u as any).apellido ?? null,
+      numero_documento:    (u as any).numero_documento ?? null,
+      tipo_documento:      (u as any).tipo_documento ?? null,
+      grado:               (u as any).grado ?? null,
+      curso:               (u as any).curso ?? null,
+      jornada:             (u as any).jornada ?? null,
+      correo:              (u as any).correo ?? null,
+      telefono:            (u as any).telefono ?? null,
+      direccion:           (u as any).direccion ?? null,
+      foto_url:            (u as any).foto_url ?? null,
+      is_active:           (u as any).is_active ?? true,
     }
+  } catch {
+    return { error: 'Token inválido o expirado' }
   }
+}
 
-  // ===== Editar estudiante (admin) =====
-  async editar(id_usuario: number, cambios: Partial<{
-    tipo_documento: string
-    numero_documento: string
-    correo: string | null
-    direccion: string | null
-    telefono: string | null
-    grado: string | null
-    curso: string | null
-    jornada: string | null
-    nombre: string | null
-    apellido: string | null
-    is_active: boolean
-  }>) {
-    const u = await Usuario.findOrFail(id_usuario)
+// usado tras actualizar contacto, etc.
+private async perfilDesdeId(id_usuario: number) {
+  const u = await Usuario.query()
+    .where('id_usuario', id_usuario)
+    .preload('institucion', (q) => q.select(['id_institucion', 'nombre_institucion']))
+    .first()
 
-    if (cambios.tipo_documento !== undefined) {
-      ;(u as any).tipo_documento = up(cambios.tipo_documento)
-    }
+  if (!u) throw new Error('Perfil no encontrado')
 
-    if (cambios.numero_documento !== undefined) {
-      const nuevoDoc = clean(cambios.numero_documento)
-      if (nuevoDoc && nuevoDoc !== (u as any).numero_documento) {
-        // Unicidad GLOBAL al editar
-        const existe = await Usuario.query()
-          .where('numero_documento', nuevoDoc)
-          .whereNot('id_usuario', id_usuario)
-          .first()
-        if (existe) throw new Error('El número de documento ya existe (en esta u otra institución)')
-        ;(u as any).numero_documento = nuevoDoc
+  return {
+    id_usuario:          (u as any).id_usuario,
+    nombre_institucion:  (u as any).institucion?.nombre_institucion ?? null, // ← nombre
+    nombre:              (u as any).nombre ?? null,
+    apellido:            (u as any).apellido ?? null,
+    numero_documento:    (u as any).numero_documento ?? null,
+    tipo_documento:      (u as any).tipo_documento ?? null,
+    grado:               (u as any).grado ?? null,
+    curso:               (u as any).curso ?? null,
+    jornada:             (u as any).jornada ?? null,
+    correo:              (u as any).correo ?? null,
+    telefono:            (u as any).telefono ?? null,
+    direccion:           (u as any).direccion ?? null,
+    foto_url:            (u as any).foto_url ?? null,
+    is_active:           (u as any).is_active ?? true,
+  }
+}
+
+  // PUT /estudiante/perfil  (solo contacto)
+  async actualizarContacto(id_usuario: number, body: any) {
+    const u = await Usuario.findBy('id_usuario', id_usuario)
+    if (!u) throw new Error('Perfil no encontrado')
+
+    // Validaciones sencillas
+    if (body.correo !== undefined) {
+      const mail = normEmail(body.correo)
+      if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+        throw new Error('Correo inválido')
       }
+      ;(u as any).correo = mail
     }
 
-    if (cambios.correo !== undefined) (u as any).correo = normEmail(cambios.correo)
-    if (cambios.direccion !== undefined) (u as any).direccion = clean(cambios.direccion)
-    if (cambios.telefono !== undefined) (u as any).telefono = clean(cambios.telefono)
-    if (cambios.grado !== undefined) (u as any).grado = normGrado(cambios.grado)
-    if (cambios.curso !== undefined) (u as any).curso = normCurso(cambios.curso)
-    if (cambios.jornada !== undefined) (u as any).jornada = normJornada(cambios.jornada)
-    if (cambios.nombre !== undefined) (u as any).nombre = clean(cambios.nombre)
-    if (cambios.apellido !== undefined) (u as any).apellido = clean(cambios.apellido)
-    if (cambios.is_active !== undefined) (u as any).is_active = cambios.is_active
+    if (body.telefono !== undefined) {
+      const tel = String(body.telefono ?? '').replace(/\D+/g, '')
+      if (tel && (tel.length < 7 || tel.length > 15)) {
+        throw new Error('Teléfono inválido')
+      }
+      ;(u as any).telefono = tel || null
+    }
+
+    if (body.direccion !== undefined) {
+      const dir = clean(body.direccion)
+      ;(u as any).direccion = dir || null
+    }
 
     await u.save()
-    return u
+
+    
+    return await this.perfilDesdeId((u as any).id_usuario)
   }
+
 
   // ===== Eliminar si no tiene historial, si no → inactivar =====
   async eliminarOInactivar(id_usuario: number) {
