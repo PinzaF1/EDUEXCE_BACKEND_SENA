@@ -41,176 +41,282 @@ class MovilController {
     }
   }
 
-  // ================= KOLB =================
-  public async kolbItems({ response }: HttpContext) {
-    const data = await kolbService.obtenerItems()
-    return response.ok(data)
-  }
+  /* TEST DE KOLB */
 
-  public async kolbGuardar({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const { respuestas } = request.only(['respuestas']) as any
-    const safe = Array.isArray(respuestas) ? respuestas : []
-    const data = await kolbService.enviarRespuestas(Number(auth.id_usuario), safe)
-    return response.ok(data)
-  }
-
-  public async kolbResultado({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const res = await kolbService.obtenerResultado(Number(auth.id_usuario))
-    if (!res) return response.notFound({ error: 'Sin resultado de Kolb' })
-    return response.ok({
-      estudiante: `${res.alumno?.nombre ?? ''} ${res.alumno?.apellido ?? ''}`.trim(),
-      documento: res.alumno?.numero_documento ?? null,
-      fecha: res.fecha_presentacion,
-      estilo: res.estilo,
-      totales: res.totales,
-    })
-  }
-
-  // ============ PARADAS / PRÁCTICAS ============ 
-  public async crearParada({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const p = request.only(['area', 'subtema', 'nivel_orden', 'usa_estilo_kolb', 'intento_actual']) as any
-
-    const area = String(p.area ?? '').trim()
-    const subtema = String(p.subtema ?? '').trim()
-    if (!area || !subtema) {
-      return response.badRequest({ error: 'Los campos "area" y "subtema" son obligatorios' })
+      public async kolbItems({ response }: HttpContext) {
+      const data = await kolbService.obtenerItems()
+      return response.ok(data)
     }
 
-    const data = await sesionesService.crearParada({
-      id_usuario: Number(auth.id_usuario),
-      area,
-      subtema,
-      nivel_orden: Number(p.nivel_orden ?? 1),
-      usa_estilo_kolb: !!p.usa_estilo_kolb,
-      intento_actual: Number(p.intento_actual ?? 1),
-    } as any)
+    public async kolbGuardar({ request, response }: HttpContext) {
+      const auth = (request as any).authUsuario
+      const { respuestas } = request.only(['respuestas']) as any
+      const safe = Array.isArray(respuestas) ? respuestas : []
+      const data = await kolbService.enviarRespuestas(Number(auth.id_usuario), safe)
+      return response.ok(data) // ahora incluye ac_ce y ae_ro en totales
+    }
 
-    return response.created(data)
+    public async kolbResultado({ request, response }: HttpContext) {
+      const auth = (request as any).authUsuario
+      const res = await kolbService.obtenerResultado(Number(auth.id_usuario))
+      if (!res) return response.notFound({ error: 'Sin resultado de Kolb' })
+      return response.ok({
+        estudiante: `${res.alumno?.nombre ?? ''} ${res.alumno?.apellido ?? ''}`.trim(),
+        documento: res.alumno?.numero_documento ?? null,
+        fecha: res.fecha_presentacion,
+        estilo: res.estilo,
+        totales: res.totales, // { ec, or, ca, ea, ac_ce, ae_ro, estiloCalculado }
+      })
+    }
+
+    // ============ PARADAS / PRÁCTICAS ============
+public async crearParada({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const p = request.only(['area', 'subtema', 'nivel_orden', 'usa_estilo_kolb', 'intento_actual']) as any
+
+  const area = String(p.area ?? '').trim()
+  const subtema = String(p.subtema ?? '').trim()
+  if (!area || !subtema) {
+    return response.badRequest({ error: 'Los campos "area" y "subtema" son obligatorios' })
   }
+
+  // default solicitado: usaEstiloKolb = true si no viene
+  const usaEstiloKolb = p.usa_estilo_kolb === undefined ? true : !!p.usa_estilo_kolb
+
+  const data = await sesionesService.crearParada({
+    id_usuario: Number(auth.id_usuario),
+    area,
+    subtema,
+    nivel_orden: Number(p.nivel_orden ?? 1),
+    usa_estilo_kolb: usaEstiloKolb,
+    intento_actual: Number(p.intento_actual ?? 1),
+  } as any)
+
+  const ses = data.sesion as any
+  const preguntas = Array.isArray(data.preguntas) ? data.preguntas : []
+
+  // response limpio de la 1ª ruta SIN el campo "preguntas"
+  const payload = {
+    sesion: {
+      idSesion: String(ses.id_sesion),
+      idUsuario: String(ses.id_usuario),
+      tipo: 'practica',
+      area: area.toLowerCase(),
+      subtema,
+      nivelOrden: Number(p.nivel_orden ?? 1),
+      modo: 'estandar',
+      usaEstiloKolb: usaEstiloKolb,
+      inicioAt: ses.inicio_at,
+      totalPreguntas: preguntas.length,
+      // ÚNICA lista con las 5 preguntas:
+      preguntasPorSubtema: preguntas,
+    }
+  }
+
+  return response.created(payload)
+}
+
 
   public async cerrarSesion({ request, response }: HttpContext) {
-    try {
-     
-      const body = request.only(['id_sesion', 'respuestas']) as any
-      const id_sesion = Number(body.id_sesion)
-      if (!id_sesion) return response.badRequest({ error: 'id_sesion es obligatorio' })
+  try {
+    const body = request.only(['id_sesion', 'respuestas']) as any
+    const id_sesion = Number(body.id_sesion)
+    if (!id_sesion) return response.badRequest({ error: 'id_sesion es obligatorio' })
 
-      const inResps = Array.isArray(body.respuestas) ? body.respuestas : []
-      // Normalizamos si vienen por id_pregunta: los ordenes deben existir en BD, así que solo
-      // enviamos tal cual si ya vienen con {orden, opcion}
-      const respuestas = inResps.map((r: any) => {
-        // si ya viene con "orden", respetamos
-        if (r?.orden != null) {
-          return {
-            orden: Number(r.orden),
-            opcion: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
-            tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
-          }
-        }
-        return r
-      })
-
-      const data = await sesionesService.cerrarSesion({
-        id_sesion,
-        respuestas,
-      } as any)
-
-      return response.ok(data)
-    } catch (e: any) {
-      return response.badRequest({ error: e?.message || 'No se pudo cerrar la sesión' })
-    }
-  }
-
-  // ============ SIMULACRO POR ÁREA ============ 
-  public async crearSimulacro({ request, response }: HttpContext) {
-    try {
-      const auth = (request as any).authUsuario
-      const body = request.only(['area', 'subtemas']) as any
-
-      const area = String(body.area || '').trim()
-      const subtemas = Array.isArray(body.subtemas) ? body.subtemas : []
-
-      if (!area || subtemas.length === 0) {
-        return response.badRequest({
-          error: 'Los campos "area" y "subtemas" son obligatorios',
-        })
-      }
-
-      const data = await sesionesService.crearSimulacroArea({
-        id_usuario: Number(auth.id_usuario),
-        area: area as any,
-        subtemas: subtemas.map((s: any) => String(s).trim()),
-      })
-
-      return response.created(data)
-    } catch (e: any) {
-      return response.badRequest({
-        error: e?.message || 'No se pudo crear el simulacro',
-      })
-    }
-  }
-
-  // POST /movil/simulacro/cerrar  -> recibe respuestas, califica y cierra
-  public async cerrarSimulacro({ request, response }: HttpContext) {
-    try {
-      const { id_sesion, respuestas } = request.only(['id_sesion', 'respuestas']) as any
-      if (!id_sesion || !Array.isArray(respuestas)) {
-        return response.badRequest({ error: 'id_sesion y respuestas son obligatorios' })
-      }
-
-      const data = await sesionesService.cerrarSesionSimulacro({
-        id_sesion: Number(id_sesion),
-        respuestas: respuestas.map((r: any) => ({
+    const inResps = Array.isArray(body.respuestas) ? body.respuestas : []
+    const respuestas = inResps.map((r: any) => {
+      if (r?.orden != null) {
+        return {
           orden: Number(r.orden),
           opcion: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
           tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
-        })),
-      })
-
-      return response.ok(data)
-    } catch (e: any) {
-      return response.badRequest({
-        error: e?.message || 'No se pudo cerrar el simulacro',
-      })
-    }
-  }
-
-  // ===== Isla del Conocimiento: iniciar simulacro mixto (HU-01/02/03) =====
-  public async islaSimulacroIniciar({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const { modalidad } = request.only(['modalidad']) as any
-    const mod = String(modalidad || 'facil').toLowerCase() === 'dificil' ? 'dificil' : 'facil'
-
-    const data = await (sesionesService as any).crearSimulacroMixto({
-      id_usuario: Number(auth.id_usuario),
-      modalidad: mod,
+        }
+      }
+      return r
     })
 
-    return response.created(data)
-  }
+    const data = await sesionesService.cerrarSesion({
+      id_sesion,
+      respuestas,
+    } as any)
 
-  // ===== Isla del Conocimiento: cerrar simulacro (HU-04/05) =====
-  public async islaSimulacroCerrar({ request, response }: HttpContext) {
+    return response.ok(data)
+  } catch (e: any) {
+    return response.badRequest({ error: e?.message || 'No se pudo cerrar la sesión' })
+  }
+}
+
+public async detalleSesion({ request, response }: HttpContext) {
+  const id_sesion = Number(request.param('id_sesion'))
+  if (!id_sesion) return response.badRequest({ error: 'id_sesion es obligatorio' })
+  const data = await sesionesService.detalleSesion(id_sesion)
+  if (!data) return response.notFound({ error: 'Sesión no encontrada' })
+  return response.ok(data)
+}
+
+
+
+// ============ SIMULACRO POR ÁREA ============ 
+
+
+public async crearSimulacro({ request, response }: HttpContext) {
+  try {
+    const auth = (request as any).authUsuario
+    const body = request.only(['area']) as any
+
+    const area = String(body.area || '').trim()
+    if (!area) {
+      return response.badRequest({ error: 'El campo "area" es obligatorio' })
+    }
+
+    const data = await sesionesService.crearSimulacroArea({
+      id_usuario: Number(auth.id_usuario),
+      area: area as any,
+    })
+
+    const ses = data.sesion as any
+    const preguntas = Array.isArray(data.preguntas) ? data.preguntas : []
+
+    // Payload limpio: sin correctas, createdAt, updatedAt, finAt, etc.
+    const payload = {
+      sesion: {
+        idSesion: String(ses.id_sesion),
+        idUsuario: String(ses.id_usuario),
+        tipo: 'simulacro',
+        area: area.toLowerCase(),
+        subtema:"todos los subtemas",
+        nivelOrden: 6,             
+        modo: 'estandar',
+        usaEstiloKolb: false,
+        inicioAt: ses.inicio_at,
+        totalPreguntas: preguntas.length,
+      },
+      totalPreguntas: preguntas.length,
+      preguntas,
+    }
+
+    return response.created(payload)
+  } catch (e: any) {
+    return response.badRequest({
+      error: e?.message || 'No se pudo crear el simulacro',
+    })
+  }
+}
+
+
+// POST /movil/simulacro/cerrar
+// POST /movil/simulacro/cerrar  -> recibe respuestas, califica y cierra
+public async cerrarSimulacro({ request, response }: HttpContext) {
+  try {
     const body = request.only(['id_sesion', 'respuestas']) as any
     const id_sesion = Number(body.id_sesion)
-    const respuestas = Array.isArray(body.respuestas) ? body.respuestas : []
+    const inResps = Array.isArray(body.respuestas) ? body.respuestas : []
 
-    const data = await (sesionesService as any).cerrarSimulacroMixto({ id_sesion, respuestas })
+    if (!id_sesion || !Array.isArray(inResps)) {
+      return response.badRequest({ error: 'id_sesion y respuestas son obligatorios' })
+    }
+
+    // ⬇️ NORMALIZACIÓN CORRECTA: acepta {orden,...} o {id_pregunta,...}
+    const respuestas = inResps.map((r: any) => {
+      if (r?.orden != null) {
+        return {
+          orden: Number(r.orden),
+          opcion: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
+          tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
+        }
+      }
+      // dejamos pasar { id_pregunta, respuesta } para que el Service resuelva el orden
+      return {
+        id_pregunta: Number(r.id_pregunta ?? r.id ?? r.idPregunta ?? NaN),
+        respuesta: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
+        tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
+      }
+    })
+
+    const data = await sesionesService.cerrarSesionSimulacro({
+      id_sesion,
+      respuestas,
+    } as any)
+
     return response.ok(data)
+  } catch (e: any) {
+    return response.badRequest({
+      error: e?.message || 'No se pudo cerrar el simulacro',
+    })
+  }
+}
+
+
+
+ // ======== CONTROLLER (métodos Isla del Conocimiento) ========
+
+ public async islaSimulacroIniciar({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const { modalidad } = (request.only(['modalidad']) as any) || {}
+  const modIn = String(modalidad ?? '').trim().toLowerCase()
+  const mod: 'facil' | 'dificil' = modIn === 'dificil' ? 'dificil' : 'facil'
+
+  const data = await (sesionesService as any).crearSimulacroMixto({
+    id_usuario: Number(auth.id_usuario),
+    modalidad: mod,
+  })
+
+  const ses = data.sesion as any
+  const preguntas = Array.isArray(data.preguntas) ? data.preguntas : []
+  const nivelOrden = mod === 'dificil' ? 8 : 7
+
+  return response.created({
+    sesion: {
+      idSesion: String(ses.id_sesion),
+      idUsuario: String(ses.id_usuario),
+      tipo: 'simulacro_mixto',
+      area: 'Todas las areas',
+      subtema: 'Todos los subtemas',
+      nivelOrden,
+      modo: 'estandar',
+      usaEstiloKolb: false,
+      inicioAt: ses.inicio_at,
+      totalPreguntas: preguntas.length,
+    },
+    totalPreguntas: preguntas.length,
+    preguntas,
+  })
+}
+
+public async islaSimulacroCerrar({ request, response }: HttpContext) {
+  const body = request.only(['id_sesion', 'respuestas']) as any
+  const id_sesion = Number(body.id_sesion)
+  const inResps = Array.isArray(body.respuestas) ? body.respuestas : []
+  if (!id_sesion || !Array.isArray(inResps)) {
+    return response.badRequest({ error: 'id_sesion y respuestas son obligatorios' })
   }
 
-  // ===== Isla del Conocimiento: ver resumen/resultado guardado =====
-  public async islaSimulacroResumen({ request, response }: HttpContext) {
-    const id_sesion = Number(request.param('id_sesion'))
-    const data = await (sesionesService as any).resumenResultadoSimulacro(id_sesion)
-    if (!data) return response.notFound({ error: 'Simulacro no encontrado' })
-    return response.ok(data)
-  }
+  const respuestas = inResps.map((r: any) => {
+    if (r?.orden != null) {
+      return {
+        orden: Number(r.orden),
+        opcion: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
+        tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
+      }
+    }
+    return {
+      id_pregunta: Number(r.id_pregunta ?? r.id ?? r.idPregunta ?? NaN),
+      respuesta: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
+      tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
+    }
+  })
 
-  // ================= PROGRESO =================
+  const data = await (sesionesService as any).cerrarSimulacroMixto({ id_sesion, respuestas })
+  return response.ok(data)
+}
+
+public async islaSimulacroResumen({ request, response }: HttpContext) {
+  const id_sesion = Number(request.param('id_sesion'))
+  const data = await (sesionesService as any).resumenResultadoSimulacro(id_sesion)
+  if (!data) return response.notFound({ error: 'Simulacro no encontrado' })
+  return response.ok(data)
+}
+
   // PROGRESO
 public async progresoResumen({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
@@ -235,11 +341,18 @@ public async progresoHistorial({ request, response }: HttpContext) {
 
 public async progresoHistorialDetalle({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
-  const id_sesion = Number(request.param('id_sesion'))
+  const raw = request.param('id_sesion')
+  const id_sesion = Number.parseInt(String(raw), 10)
+
+  if (!Number.isFinite(id_sesion) || id_sesion <= 0) {
+    return response.badRequest({ error: 'id_sesion es obligatorio y debe ser numérico' })
+  }
+
   const data = await progresoService.historialDetalle(auth.id_usuario, id_sesion)
-  if (!data) return response.notFound({ error: 'Simulacro no encontrado' })
+  if (!data) return response.notFound({ error: 'Intento no encontrado' })
   return response.ok(data)
 }
+
 
   // ============ RANKING / LOGROS ============ 
   public async ranking({ request, response }: HttpContext) {
@@ -358,6 +471,31 @@ public async progresoHistorialDetalle({ request, response }: HttpContext) {
     }
   }
 
+  /** GET /movil/retos?tipo=recibidos|enviados&estado=pendiente|en_curso|finalizado&q= */
+  // GET /movil/retos?tipo=recibidos|enviados|todos&estado=pentiente|en_curso|finalizado&q=texto
+public async listarRetos({ request, response }: HttpContext) {
+  try {
+    const auth = (request as any).authUsuario;
+    const tipo   = (request.input('tipo') || 'todos') as any;
+    const estado = request.input('estado') as any; // opcional
+    const q      = request.input('q') || '';
+
+    const data = await retosService.listarRetos({
+      id_institucion: Number(auth.id_institucion),
+      user_id: Number(auth.id_usuario),
+      tipo,
+      estado,
+      q,
+    });
+
+    return response.ok(data);
+  } catch (err: any) {
+    return response.internalServerError({ message: err?.message || 'Error al listar retos' });
+  }
+}
+
+
+
 
   // ============ QUIZ INICIAL (DIAGNÓSTICO) ============ 
   public async quizInicialIniciar({ request, response }: HttpContext) {
@@ -381,6 +519,7 @@ public async progresoHistorialDetalle({ request, response }: HttpContext) {
     // Devuelve lo que pide: puntajes por área, global y detalle con explicación
     return response.ok({ id_usuario: Number(auth.id_usuario), ...data })
   }
+
 }
 
 export default MovilController

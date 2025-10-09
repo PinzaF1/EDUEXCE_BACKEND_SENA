@@ -39,11 +39,13 @@ Route.get('kolb/resultado', (ctx) => new MovilController().kolbResultado(ctx)).u
 Route.post('quizz/iniciar', (ctx) => new MovilController().quizInicialIniciar(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('quiz-inicial/cerrar',(ctx) => new MovilController().quizInicialCerrar(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
-
+/*MOVIL NIVELES */
 Route.post('sesion/parada', (ctx) => new MovilController().crearParada(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('sesion/cerrar', (ctx) => new MovilController().cerrarSesion(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/simulacro', (ctx) => new MovilController().crearSimulacro(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/simulacro/cerrar', (ctx) => new MovilController().cerrarSimulacro(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/sesion/:id_sesion/detalle', (ctx) => new MovilController().detalleSesion(ctx)).use(onlyRol({ rol: 'estudiante' }))
+
 
 // ISLA DEL CONOCIMIENTO 
 Route.post('movil/isla/simulacro', (ctx) => new MovilController().islaSimulacroIniciar(ctx)).use(onlyRol({ rol: 'estudiante' }))
@@ -77,6 +79,7 @@ Route.get('movil/logros/todos', (ctx) => new MovilController().logrosTodos(ctx))
 
 Route.group(() => {
   Route.get('oponentes', (ctx) => new MovilController().listarOponentes(ctx))
+  Route.get('retos', (ctx) => new MovilController().listarRetos(ctx))              // ← NUEVO
   Route.post('retos', (ctx) => new MovilController().crearReto(ctx))
   Route.post('retos/:id_reto/aceptar', (ctx) => new MovilController().aceptarReto(ctx))
   Route.post('retos/ronda', (ctx) => new MovilController().responderRonda(ctx))
@@ -84,6 +87,7 @@ Route.group(() => {
 })
 .prefix('/movil')
 .use(onlyRol({ rol: 'estudiante' }))
+
 
 
 

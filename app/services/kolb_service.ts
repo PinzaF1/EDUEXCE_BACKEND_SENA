@@ -74,20 +74,15 @@ export default class KolbService {
       else if (d === 'EA') tot.ea += r.valor
     }
 
-    // 4) Estilo por top-2
-    const arr = [
-      { k: 'EC', v: tot.ec },
-      { k: 'OR', v: tot.or },
-      { k: 'CA', v: tot.ca },
-      { k: 'EA', v: tot.ea },
-    ].sort((a, b) => b.v - a.v)
-    const top2 = [arr[0].k, arr[1].k].sort().join('+')
+    // 4) Estilo por diferencias (método correcto Kolb)
+    const ac_ce = tot.ca - tot.ec   // AC - CE (vertical)
+    const ae_ro = tot.ea - tot.or   // AE - RO (horizontal)
 
     let nombreEstilo: 'ACOMODADOR' | 'ASIMILADOR' | 'CONVERGENTE' | 'DIVERGENTE'
-    if (top2 === 'CA+EA') nombreEstilo = 'CONVERGENTE'
-    else if (top2 === 'CA+OR') nombreEstilo = 'ASIMILADOR'
-    else if (top2 === 'EC+EA') nombreEstilo = 'ACOMODADOR'
-    else nombreEstilo = 'DIVERGENTE'
+    if (ac_ce < 0 && ae_ro > 0) nombreEstilo = 'ACOMODADOR'
+    else if (ac_ce < 0 && ae_ro < 0) nombreEstilo = 'DIVERGENTE'
+    else if (ac_ce > 0 && ae_ro < 0) nombreEstilo = 'ASIMILADOR'
+    else nombreEstilo = 'CONVERGENTE'
 
     const estiloRow = await EstilosAprendizaje.findBy('estilo', nombreEstilo)
     if (!estiloRow) throw new Error('Catálogo de estilos no inicializado')
@@ -107,6 +102,9 @@ export default class KolbService {
       total_observacion_reflexiva: tot.or,
       total_conceptualizacion_abstracta: tot.ca,
       total_experimentacion_activa: tot.ea,
+      // Si tienes columnas para diferencias, puedes descomentar:
+      // dif_ac_menos_ce: ac_ce,
+      // dif_ae_menos_ro: ae_ro,
     }
 
     try {
@@ -120,7 +118,7 @@ export default class KolbService {
       }
     }
 
-    return { estilo: nombreEstilo, totales: tot }
+    return { estilo: nombreEstilo, totales: { ...tot, ac_ce, ae_ro } }
   }
 
   async obtenerResultado(id_usuario: number) {
@@ -178,8 +176,17 @@ export default class KolbService {
       }
     }
 
+    // Diagnóstico: diferencias y estilo recalculado (no cambia DB)
+    const ac_ce = totales.ca - totales.ec
+    const ae_ro = totales.ea - totales.or
+    let estiloCalculado: 'ACOMODADOR' | 'ASIMILADOR' | 'CONVERGENTE' | 'DIVERGENTE'
+    if (ac_ce < 0 && ae_ro > 0) estiloCalculado = 'ACOMODADOR'
+    else if (ac_ce < 0 && ae_ro < 0) estiloCalculado = 'DIVERGENTE'
+    else if (ac_ce > 0 && ae_ro < 0) estiloCalculado = 'ASIMILADOR'
+    else estiloCalculado = 'CONVERGENTE'
+
     ;(row as any).alumno = (row as any).usuario
-    ;(row as any).totales = totales
+    ;(row as any).totales = { ...totales, ac_ce, ae_ro, estiloCalculado }
     return row
   }
 }
