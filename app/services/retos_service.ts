@@ -10,34 +10,33 @@ import { DateTime } from 'luxon'
 type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
 
 function parseIds(raw: any): number[] {
-  // soporta json, array o csv
   try {
-    if (Array.isArray(raw)) return raw.map((x) => Number(x)).filter(Number.isFinite);
+    if (Array.isArray(raw)) return raw.map((x) => Number(x)).filter(Number.isFinite)
     if (typeof raw === 'string') {
       try {
-        const j = JSON.parse(raw);
-        if (Array.isArray(j)) return j.map((x: any) => Number(x)).filter(Number.isFinite);
+        const j = JSON.parse(raw)
+        if (Array.isArray(j)) return j.map((x: any) => Number(x)).filter(Number.isFinite)
       } catch {
-        return raw.split(/[\s,;|]+/).map((x) => Number(x)).filter(Number.isFinite);
+        return raw.split(/[\s,;|]+/).map((x) => Number(x)).filter(Number.isFinite)
       }
     }
   } catch {}
-  return [];
+  return []
 }
 
 function mkNom(u?: any | null) {
-  if (!u) return null;
-  const nom = [u.nombre, u.apellido].filter(Boolean).join(' ').trim();
+  if (!u) return null
+  const nom = [u.nombre, u.apellido].filter(Boolean).join(' ').trim()
   return {
     id: Number(u.id_usuario),
     nombre: nom || `Usuario ${u.id_usuario}`,
     grado: u.grado ?? null,
     curso: u.curso ?? null,
     foto_url: u.foto_url ?? null,
-  };
+  }
 }
 
-/** Mapea la pregunta al formato que consume la app */
+/** Normaliza la pregunta al formato del cliente */
 function mapPreguntaForClient(p: any) {
   return {
     id_pregunta: Number(p.id_pregunta) || null,
@@ -79,17 +78,15 @@ export default class RetosService {
       .where('id_institucion', d.id_institucion)
       .whereNot('id_usuario', d.solicitante_id)
 
-    // Búsqueda opcional por nombre / apellido (columnas reales)
+    // Búsqueda opcional por nombre / apellido
     if (d.q && String(d.q).trim()) {
       const term = `%${String(d.q).trim()}%`
       q.where((qb) => qb.whereILike('nombre', term).orWhereILike('apellido', term))
     }
 
-    // Orden seguro usando columnas existentes
     q.orderByRaw(`COALESCE(nombre,'') ASC, COALESCE(apellido,'') ASC`)
     const usuarios = await q.limit(200)
 
-    // Respuesta
     const lista = usuarios.map((u: any) => {
       const id = Number(u.id_usuario)
       const nom = [u.nombre, u.apellido].filter(Boolean).join(' ').trim()
@@ -112,205 +109,290 @@ export default class RetosService {
   }
 
   /* ===================== CREAR RETO ===================== */
-  async crearReto(d: {
-    id_institucion: number
-    creado_por: number
-    cantidad: number
-    area: Area
-    oponente_id: number
-  }) {
-    const TARGET = Math.max(1, Number(d.cantidad) || 25)
-    const area = d.area as Area
-    const oponente = Number(d.oponente_id)
-    if (!oponente || !Number.isFinite(oponente)) throw new Error('oponente_id es obligatorio')
+    // ===================== CREAR RETO =====================
+async crearReto(d: {
+  id_institucion: number
+  creado_por: number
+  cantidad?: number
+  area: string
+  oponente_id: number
+}) {
+  // normalizamos el área que venga "sociales" -> "Sociales"
+  const canon = (s: string) => {
+    const t = String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase()
+    if (t.startsWith('mate')) return 'Matematicas'
+    if (t.startsWith('leng') || t.startsWith('lect')) return 'Lenguaje'
+    if (t.startsWith('cien')) return 'Ciencias'
+    if (t.startsWith('soci')) return 'Sociales'
+    if (t.startsWith('ing'))  return 'Ingles'
+    return s || 'General'
+  }
 
-    // Validar que el oponente no esté en reto activo
-    const activos = await Reto.query()
-      .where('id_institucion', d.id_institucion)
-      .whereIn('estado', ['pendiente', 'en_curso'])
-    for (const r of activos) {
-      try {
-        const arr = JSON.parse(String((r as any).participantes_json || '[]'))
-        const ids = Array.isArray(arr) ? arr.map((x: any) => Number(x)).filter(Number.isFinite) : []
-        if (ids.includes(oponente)) throw new Error('El oponente seleccionado ya está en un reto activo.')
-      } catch {}
-    }
+  const TARGET = Math.max(1, Number(d.cantidad ?? 25))
+  const area = canon(d.area) as Area
+  const oponente = Number(d.oponente_id)
+  if (!oponente || !Number.isFinite(oponente)) throw new Error('oponente_id es obligatorio')
 
-    // 1) Intentar con IA
-    let preguntas: any[] = await this.ia.generarPreguntas({
-      area,
-      cantidad: TARGET,
-      id_institucion: d.id_institucion,
-      time_limit_seconds: null,
-    } as any)
+  // Validar que el oponente no esté en reto activo
+  const activos = await Reto.query()
+    .where('id_institucion', d.id_institucion)
+    .whereIn('estado', ['pendiente', 'en_curso'])
+  for (const r of activos) {
+    try {
+      const arr = JSON.parse(String((r as any).participantes_json || '[]'))
+      const ids = Array.isArray(arr) ? arr.map((x: any) => Number(x)).filter(Number.isFinite) : []
+      if (ids.includes(oponente)) throw new Error('El oponente seleccionado ya está en un reto activo.')
+    } catch {}
+  }
 
-    // 2) Completar desde banco si faltan
-    const elegidas: any[] = []
-    const ya = new Set<number>()
-    for (const p of preguntas || []) {
-      const id = Number((p as any).id_pregunta)
-      if (!ya.has(id) && elegidas.length < TARGET) { ya.add(id); elegidas.push(p) }
-    }
-    const faltan = () => TARGET - elegidas.length
-    if (faltan() > 0) {
-      const extra = await BancoPregunta.query()
-        .whereIn('area', [area, area === 'Matematicas' ? 'Matemáticas' : area])
-        .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
-        .orderByRaw('random()')
-        .limit(faltan())
-      for (const r of extra) {
-        const id = Number((r as any).id_pregunta)
-        if (!ya.has(id) && elegidas.length < TARGET) {
-          ya.add(id)
-          elegidas.push({
-            id_pregunta: (r as any).id_pregunta,
-            area: (r as any).area,
-            subtema: (r as any).subtema,
-            dificultad: (r as any).dificultad,
-            pregunta: (r as any).pregunta,
-            opciones: (r as any).opciones,
-            respuesta_correcta: (r as any).respuesta_correcta,
-            explicacion: (r as any).explicacion,
-            time_limit_seconds: null,
-          })
-        }
+  // 1) Intentar con IA
+  let preguntas: any[] = await this.ia.generarPreguntas({
+    area,
+    cantidad: TARGET,
+    id_institucion: d.id_institucion,
+    time_limit_seconds: null,
+  } as any)
+
+  // 2) Completar desde banco si faltan
+  const elegidas: any[] = []
+  const ya = new Set<number>()
+  for (const p of preguntas || []) {
+    const id = Number((p as any).id_pregunta)
+    if (!ya.has(id) && elegidas.length < TARGET) { ya.add(id); elegidas.push(p) }
+  }
+  const faltan = () => TARGET - elegidas.length
+  if (faltan() > 0) {
+    const extra = await BancoPregunta.query()
+      .whereIn('area', [area, area === 'Matematicas' ? 'Matemáticas' : area])
+      .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+      .orderByRaw('random()')
+      .limit(faltan())
+    for (const r of extra) {
+      const id = Number((r as any).id_pregunta)
+      if (!ya.has(id) && elegidas.length < TARGET) {
+        ya.add(id)
+        elegidas.push({
+          id_pregunta: (r as any).id_pregunta,
+          area: (r as any).area,
+          subtema: (r as any).subtema,
+          dificultad: (r as any).dificultad,
+          pregunta: (r as any).pregunta,
+          opciones: (r as any).opciones,
+          respuesta_correcta: (r as any).respuesta_correcta,
+          explicacion: (r as any).explicacion,
+          time_limit_seconds: null,
+        })
       }
     }
-
-    // Persistimos las preguntas en reglas_json
-    const reglas = { limite_seg: null, preguntas: elegidas.map(mapPreguntaForClient) }
-    const participantes = [d.creado_por, oponente]
-
-    const reto = await Reto.create({
-      id_institucion: d.id_institucion,
-      creado_por: d.creado_por,
-      tipo: '1v1',
-      area,
-      estado: 'pendiente',
-      participantes_json: JSON.stringify(participantes),
-      reglas_json: JSON.stringify(reglas),
-      resultados_json: null,
-    } as any)
-
-    // Info del oponente para mostrar
-    const op = await Usuario.find(oponente)
-    const oponente_info = op
-      ? {
-          id_usuario: Number((op as any).id_usuario),
-          nombre: [ (op as any).nombre, (op as any).apellido ].filter(Boolean).join(' ').trim(),
-          grado: (op as any).grado ?? null,
-          curso: (op as any).curso ?? null,
-          foto_url: (op as any).foto_url ?? null,
-        }
-      : null
-
-    // Devolvemos también las preguntas
-    return {
-      id_reto: Number((reto as any).id_reto),
-      estado: String((reto as any).estado), // 'pendiente'
-      area,
-      cantidad: reglas.preguntas.length,
-      preguntas: reglas.preguntas,
-      oponente: oponente_info,
-    }
   }
+
+  // ⚠️ Serializamos para DBs con columnas TEXT
+  const reglasObj = { limite_seg: null, preguntas: elegidas.map(mapPreguntaForClient) }
+  const participantesArr = [d.creado_por, oponente]
+
+  const reto = await Reto.create({
+    id_institucion: d.id_institucion,
+    creado_por: d.creado_por,
+    tipo: '1v1',
+    area,
+    estado: 'pendiente',
+    participantes_json: JSON.stringify(participantesArr),
+    reglas_json: JSON.stringify(reglasObj),
+    resultados_json: null,
+  } as any)
+
+  // Info del oponente
+  const op = await Usuario.find(oponente)
+  const oponente_info = op
+    ? {
+        id_usuario: Number((op as any).id_usuario),
+        nombre: [ (op as any).nombre, (op as any).apellido ].filter(Boolean).join(' ').trim(),
+        grado: (op as any).grado ?? null,
+        curso: (op as any).curso ?? null,
+        foto_url: (op as any).foto_url ?? null,
+      }
+    : null
+
+  return {
+    id_reto: Number((reto as any).id_reto),
+    estado: String((reto as any).estado), // 'pendiente'
+    area,
+    cantidad: reglasObj.preguntas.length,
+    preguntas: reglasObj.preguntas,
+    oponente: oponente_info,
+  }
+}
+
 
   /* ===================== ACEPTAR RETO ===================== */
-  async aceptarReto(id_reto: number, id_usuario_invitado: number) {
-    const reto = await Reto.findOrFail(id_reto)
+  // ====== RetosService.aceptarReto (service) ======
+async aceptarReto(id_reto: number, id_usuario_invitado: number) {
+  const reto = await Reto.findOrFail(id_reto)
 
-    // Leer preguntas desde reglas_json
-    let preguntas: any[] = []
-    try {
-      const reglas = typeof (reto as any).reglas_json === 'string'
-        ? JSON.parse(String((reto as any).reglas_json))
-        : (reto as any).reglas_json || {}
-      if (Array.isArray(reglas?.preguntas)) preguntas = reglas.preguntas
-    } catch {}
+  // Leer preguntas desde reglas_json
+  let preguntas: any[] = []
+  try {
+    const reglas = typeof (reto as any).reglas_json === 'string'
+      ? JSON.parse(String((reto as any).reglas_json))
+      : (reto as any).reglas_json || {}
+    if (Array.isArray(reglas?.preguntas)) preguntas = reglas.preguntas
+  } catch {}
 
-    // Si por alguna razón no hubiera preguntas, generamos
-    if (!Array.isArray(preguntas) || preguntas.length === 0) {
-      const area = (reto as any).area as Area
-      const pack = await this.ia.generarPreguntas({
-        area, cantidad: 25,
-        id_institucion: Number((reto as any).id_institucion) || undefined,
-        time_limit_seconds: null,
-      } as any)
-      preguntas = (pack || []).map(mapPreguntaForClient)
-      reto.merge({ reglas_json: { limite_seg: null, preguntas } })
-      await reto.save()
-    }
-
-    // Participantes (creador + invitado)
-    let participantes: number[] = []
-    try {
-      const raw = (reto as any).participantes_json
-      const arr = typeof raw === 'string' ? JSON.parse(raw) : raw
-      if (Array.isArray(arr)) participantes = arr.map((x: any) => Number(x)).filter(Number.isFinite)
-    } catch {}
-    const creador = Number((reto as any).creado_por) || null
-    participantes = Array.from(new Set<number>([
-      ...participantes,
-      ...(creador ? [creador] : []),
-      Number(id_usuario_invitado),
-    ]))
-
-    reto.merge({ participantes_json: participantes, estado: 'en_curso' })
+  // Si no hubiera preguntas, generamos y guardamos
+  if (!Array.isArray(preguntas) || preguntas.length === 0) {
+    const area = (reto as any).area as Area
+    const pack = await this.ia.generarPreguntas({
+      area, cantidad: 25,
+      id_institucion: Number((reto as any).id_institucion) || undefined,
+      time_limit_seconds: null,
+    } as any)
+    preguntas = (pack || []).map(mapPreguntaForClient)
+    ;(reto as any).reglas_json = { limite_seg: null, preguntas }
     await reto.save()
-
-    // Crear sesiones y detalle por jugador
-    const sesiones: Array<{ id_usuario: number; id_sesion: number }> = []
-    for (const uid of participantes) {
-      const ses = await Sesion.create({
-        id_usuario: uid,
-        tipo: 'reto',
-        modo: 'estandar',
-        area: (reto as any).area || null,
-        usa_estilo_kolb: false,
-        inicio_at: DateTime.local(),
-        total_preguntas: preguntas.length,
-        correctas: 0,
-      } as any)
-
-      const id_sesion = Number((ses as any).id_sesion)
-      let orden = 1
-      for (const p of preguntas) {
-        await SesionDetalle.create({
-          id_sesion,
-          id_pregunta: Number((p as any).id_pregunta) || null,
-          orden,
-          tiempo_asignado_seg: (p as any).time_limit_seconds ?? null,
-        } as any)
-        orden++
-      }
-      sesiones.push({ id_usuario: uid, id_sesion })
-    }
-
-    reto.merge({ resultados_json: { sesiones_por_usuario: sesiones } })
-    await reto.save()
-    await Reto.query().where('id_reto', id_reto).update({ resultados_json: { sesiones_por_usuario: sesiones } })
-
-    // Devolvemos también las preguntas
-    return {
-      reto: {
-        id_reto: Number((reto as any).id_reto),
-        estado: String((reto as any).estado),
-        participantes,
-      },
-      sesiones,
-      preguntas,
-    }
   }
 
-  /* RESPONDER RONDA */
+  // Participantes (creador + invitado)
+  let participantes: number[] = []
+  try {
+    const raw = (reto as any).participantes_json
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (Array.isArray(arr)) participantes = arr.map((x: any) => Number(x)).filter(Number.isFinite)
+  } catch {}
+  const creador = Number((reto as any).creado_por) || null
+  participantes = Array.from(new Set<number>([
+    ...(creador ? [creador] : []),
+    Number(id_usuario_invitado),
+  ]))
+
+  ;(reto as any).participantes_json = participantes
+  ;(reto as any).estado = 'en_curso'
+  await reto.save()
+
+  // Crear sesiones para cada participante (sin id_reto en Sesion)
+  const sesiones: Array<{ id_usuario: number; id_sesion: number }> = []
+  for (const uid of participantes) {
+    const ses = await Sesion.create({
+      id_usuario: uid,
+      tipo: 'reto',
+      modo: 'estandar',
+      area: (reto as any).area || null,
+      usa_estilo_kolb: false,
+      inicio_at: DateTime.local(),
+      total_preguntas: preguntas.length,
+      correctas: 0,
+    } as any)
+
+    const id_sesion = Number((ses as any).id_sesion)
+    let orden = 1
+    for (const p of preguntas) {
+      await SesionDetalle.create({
+        id_sesion,
+        id_pregunta: Number((p as any).id_pregunta) || null,
+        orden,
+        tiempo_asignado_seg: (p as any).time_limit_seconds ?? null,
+      } as any)
+      orden++
+    }
+    sesiones.push({ id_usuario: uid, id_sesion })
+  }
+
+  // Guardar mapeo sesiones<->usuarios en el reto
+  ;(reto as any).resultados_json = { sesiones_por_usuario: sesiones }
+  await reto.save()
+
+  return {
+    reto: {
+      id_reto: Number((reto as any).id_reto),
+      estado: String((reto as any).estado),
+      participantes,
+    },
+    sesiones,
+    preguntas,
+  }
+}
+
+
   /* ===================== RESPONDER RONDA ===================== */
+  /* ===================== RESPONDER RONDA ===================== */
+// Reemplaza SOLO este método en tu service
 async responderRonda(d: {
   id_sesion: number
   respuestas: Array<{ orden: number; opcion: string; tiempo_empleado_seg?: number }>
 }) {
   const ses = await Sesion.findOrFail(d.id_sesion)
 
-  // === Detalles de la sesión ===
+  // ===== Helpers locales (no cambian nada fuera de este método) =====
+  const parseParticipantes = (raw: any): number[] => {
+    if (Array.isArray(raw)) return raw.map(Number).filter(Number.isFinite)
+    if (typeof raw === 'string') {
+      try { const a = JSON.parse(raw); if (Array.isArray(a)) return a.map(Number).filter(Number.isFinite) } catch {}
+      return raw.split(/[\s,;|]+/).map(Number).filter(Number.isFinite)
+    }
+    return []
+  }
+
+  const findRetoBySesionId = async (idSesion: number) => {
+    const retos = await Reto.query()
+      .whereIn('estado', ['pendiente', 'en_curso', 'finalizado'])
+      .orderBy('id_reto', 'desc')
+
+    for (const r of retos as any[]) {
+      try {
+        const raw = (r as any).resultados_json
+        const obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+        const arr = Array.isArray(obj?.sesiones_por_usuario) ? obj.sesiones_por_usuario : []
+        if (arr.some((x: any) => Number(x.id_sesion) === Number(idSesion))) return r
+      } catch {}
+    }
+    return null
+  }
+
+  const buildResumen = async (reto: any) => {
+    const participantes = parseParticipantes((reto as any).participantes_json).sort((a,b)=>a-b)
+
+    // Leer el mapeo guardado
+    let mapSes: Array<{ id_usuario: number; id_sesion: number; correctas?: number }> = []
+    try {
+      const raw = (reto as any).resultados_json
+      const obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+      if (Array.isArray(obj?.sesiones_por_usuario)) mapSes = obj.sesiones_por_usuario
+    } catch {}
+
+    // Armar stats iguales para ambos
+    const jugadores: Array<{ id_usuario: number; correctas: number; tiempo_total_seg: number }> = []
+    for (const uid of participantes) {
+      const m = mapSes.find((x) => Number(x.id_usuario) === Number(uid))
+      let sRow: any = m ? await Sesion.find(m.id_sesion) : null
+      if (!sRow) {
+        sRow = await Sesion.query()
+          .where('tipo', 'reto')
+          .where('id_usuario', uid)
+          .orderBy('inicio_at', 'desc')
+          .first()
+      }
+      if (!sRow) continue
+
+      const dets = await SesionDetalle.query().where('id_sesion', Number((sRow as any).id_sesion))
+      const corr = dets.filter((d: any) => d.es_correcta === true).length
+      const ttot = dets.reduce((a: number, b: any) => a + (Number(b.tiempo_empleado_seg) || 0), 0)
+
+      jugadores.push({ id_usuario: uid, correctas: corr, tiempo_total_seg: ttot })
+    }
+
+    // Ganador solo cuando ambos tienen datos
+    let ganador: number | null = null
+    if (jugadores.length >= 2) {
+      const [a, b] = jugadores
+      if (a.correctas > b.correctas) ganador = a.id_usuario
+      else if (b.correctas > a.correctas) ganador = b.id_usuario
+      else ganador = (a.tiempo_total_seg <= b.tiempo_total_seg) ? a.id_usuario : b.id_usuario
+    }
+
+    return { id_reto: Number((reto as any).id_reto), jugadores, ganador }
+  }
+  // ===== Fin helpers =====
+
+  // === Detalles & banco ===
   const detalles = await SesionDetalle.query()
     .where('id_sesion', Number((ses as any).id_sesion))
     .orderBy('orden', 'asc')
@@ -320,21 +402,21 @@ async responderRonda(d: {
 
   const correctaDe = new Map<number, string>()
   for (const b of banco) {
-    correctaDe.set(
-      Number((b as any).id_pregunta),
-      String((b as any).respuesta_correcta || '').toUpperCase()
-    )
+    correctaDe.set(Number((b as any).id_pregunta), String((b as any).respuesta_correcta || '').toUpperCase())
   }
 
-  // === Procesamos respuestas ===
+  // === Procesar respuestas ===
   let correctas = 0
+  let tiempo_total_seg = 0
   for (const r of d.respuestas || []) {
     const det = detalles.find((x: any) => Number(x.orden) === Number(r.orden))
     if (!det) continue
 
     ;(det as any).alternativa_elegida = r.opcion
     const t = Number(r.tiempo_empleado_seg)
-    ;(det as any).tiempo_empleado_seg = Number.isFinite(t) ? t : null
+    const tOk = Number.isFinite(t) ? t : 0
+    ;(det as any).tiempo_empleado_seg = tOk
+    tiempo_total_seg += tOk
     ;(det as any).respondida_at = DateTime.local()
 
     const idp = Number((det as any).id_pregunta)
@@ -345,7 +427,7 @@ async responderRonda(d: {
     await det.save()
   }
 
-  // === Guardamos resumen de la sesión ===
+  // === Guardar resumen sesión ===
   ;(ses as any).correctas = correctas
   ;(ses as any).puntaje_porcentaje = Math.round(
     (correctas * 100) / Math.max(1, Number((ses as any).total_preguntas))
@@ -353,156 +435,166 @@ async responderRonda(d: {
   ;(ses as any).fin_at = DateTime.local()
   await ses.save()
 
-  /* --- Actualizamos también el reto con el progreso del jugador --- */
-  try {
-    const reto = await Reto.query()
-      .where('id_reto', (ses as any).id_reto || null)
-      .first()
+  // === Ubicar el reto que contiene esta sesión (robusto y simétrico) ===
+  let reto = await findRetoBySesionId(Number((ses as any).id_sesion))
 
-    if (reto) {
-      let resObj: any = {}
-      try {
-        const raw = (reto as any).resultados_json
-        resObj = typeof raw === 'string' ? JSON.parse(raw) : raw || {}
-      } catch {}
-
-      // Si no existe estructura, la creamos
-      if (!Array.isArray(resObj.sesiones_por_usuario)) {
-        resObj.sesiones_por_usuario = []
-      }
-
-      // Buscamos esta sesión
-      const idx = resObj.sesiones_por_usuario.findIndex(
-        (x: any) => Number(x.id_sesion) === Number(d.id_sesion)
-      )
-      if (idx >= 0) {
-        resObj.sesiones_por_usuario[idx].correctas = correctas
-      } else {
-        // En caso de que no esté, la agregamos
-        resObj.sesiones_por_usuario.push({
-          id_usuario: (ses as any).id_usuario,
-          id_sesion: (ses as any).id_sesion,
-          correctas,
-        })
-      }
-
-      reto.merge({ resultados_json: resObj })
-      await reto.save()
-    }
-  } catch (err) {
-    console.error('Error actualizando resultados_json:', err)
+  // Si por alguna razón no lo encontró, intentamos uno en curso reciente (fallback)
+  if (!reto) {
+    reto = await Reto.query().where('estado', 'en_curso').orderBy('id_reto', 'desc').first()
   }
 
-  // === Devolvemos resultado básico ===
-  return {
-    id_sesion: Number((ses as any).id_sesion),
-    correctas,
-    puntaje: Number((ses as any).puntaje_porcentaje),
-  }
-}
+  let resumenReto = { id_reto: null as number | null, jugadores: [] as Array<{id_usuario:number;correctas:number;tiempo_total_seg:number}>, ganador: null as number | null }
 
-
-  /* ===================== ESTADO DEL RETO ===================== */
-    /* ===================== ESTADO DEL RETO ===================== */
-async estadoReto(id_reto: number) {
-  const reto = await Reto.findOrFail(id_reto)
-
-  // === Participantes ===
-  let participantes: number[] = []
-  const rawPart = (reto as any).participantes_json
-  if (Array.isArray(rawPart)) {
-    participantes = rawPart.map(Number).filter(Number.isFinite)
-  } else if (typeof rawPart === 'string') {
-    try {
-      const p = JSON.parse(rawPart)
-      if (Array.isArray(p)) participantes = p.map(Number).filter(Number.isFinite)
-    } catch {
-      const asCsv = rawPart.split(/[\s,;|]+/).map(Number).filter(Number.isFinite)
-      if (asCsv.length) participantes = asCsv
-    }
-  }
-
-  // === Sesiones guardadas en resultados_json ===
-  let mapSesiones: Array<{ id_usuario: number; id_sesion: number; correctas?: number }> = []
-  const rawRes = (reto as any).resultados_json
-  if (rawRes && typeof rawRes === 'object' && Array.isArray(rawRes.sesiones_por_usuario)) {
-    mapSesiones = rawRes.sesiones_por_usuario
-  } else if (typeof rawRes === 'string') {
-    try {
-      const r = JSON.parse(rawRes)
-      if (Array.isArray(r?.sesiones_por_usuario)) mapSesiones = r.sesiones_por_usuario
-    } catch {}
-  }
-
-  // === Resumen por jugador ===
-  const jugadores: Array<{ id_usuario: number; correctas: number; tiempo_total_seg: number }> = []
-
-  for (const uid of participantes) {
-    const entry = mapSesiones.find((x) => Number(x.id_usuario) === Number(uid))
-    let ses = null
-
-    // Preferimos la sesión mapeada, si existe
-    if (entry) {
-      ses = await Sesion.find(entry.id_sesion)
-    } else {
-      ses = await Sesion.query()
-        .where('tipo', 'reto')
-        .where('id_usuario', uid)
-        .orderBy('inicio_at', 'desc')
-        .first()
-    }
-
-    if (!ses) continue
-
-    let correctas = Number((ses as any).correctas) || 0
-    let tiempo = 0
-
-    // Calculamos tiempo desde los detalles
-    const dets = await SesionDetalle.query().where('id_sesion', Number((ses as any).id_sesion))
-    if (!correctas) {
-      correctas = dets.filter((d: any) => d.es_correcta === true).length
-    }
-    tiempo = dets.reduce((a: number, b: any) => a + (Number(b.tiempo_empleado_seg) || 0), 0)
-
-    jugadores.push({ id_usuario: uid, correctas, tiempo_total_seg: tiempo })
-  }
-
-  // === Determinar ganador ===
-  let ganador: number | null = null
-  if (jugadores.length >= 2) {
-    const [a, b] = jugadores
-    if (a.correctas > b.correctas) ganador = a.id_usuario
-    else if (b.correctas > a.correctas) ganador = b.id_usuario
-    else {
-      // empate: gana el de menor tiempo
-      ganador = a.tiempo_total_seg <= b.tiempo_total_seg ? a.id_usuario : b.id_usuario
-    }
-  }
-
-  // === Solo finaliza cuando todos respondieron ===
-  const respondedAll = jugadores.length >= participantes.length && jugadores.every(j => j.correctas >= 0)
-  if (respondedAll) {
+  if (reto) {
+    // 1) Persistir/actualizar esta sesión en resultados_json
     let resObj: any = {}
     try {
       const raw = (reto as any).resultados_json
       resObj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
     } catch {}
-    resObj.ganador_id = ganador
-    reto.merge({ estado: 'finalizado', resultados_json: resObj })
+    if (!Array.isArray(resObj.sesiones_por_usuario)) resObj.sesiones_por_usuario = []
+
+    const idx = resObj.sesiones_por_usuario.findIndex(
+      (x: any) => Number(x.id_sesion) === Number((ses as any).id_sesion)
+    )
+    const payloadSes = {
+      id_usuario: Number((ses as any).id_usuario),
+      id_sesion: Number((ses as any).id_sesion),
+      correctas,
+      tiempo_total_seg,
+      finalizada: true,
+    }
+    if (idx >= 0) resObj.sesiones_por_usuario[idx] = { ...resObj.sesiones_por_usuario[idx], ...payloadSes }
+    else resObj.sesiones_por_usuario.push(payloadSes)
+
+    ;(reto as any).resultados_json = resObj
     await reto.save()
+
+    // 2) Construir SIEMPRE el mismo resumen para ambos
+    const snap = await buildResumen(reto)
+    resumenReto = { ...snap }
+
+    // 3) Si ambos terminaron, cerrar reto y fijar ganador en resultados_json
+    if (resumenReto.jugadores.length >= 2 && resumenReto.ganador != null) {
+      ;(reto as any).estado = 'finalizado'
+      try {
+        const raw = (reto as any).resultados_json
+        const obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+        obj.ganador_id = resumenReto.ganador
+        ;(reto as any).resultados_json = obj
+        await reto.save()
+      } catch {}
+    }
   }
 
-  // === Devolvemos resultado ===
+  // === Respuesta (misma estructura para los dos jugadores) ===
   return {
-    id_reto: Number((reto as any).id_reto),
-    estado: String((reto as any).estado),
-    ganador: ganador ?? null,
-    jugadores,
+    id_sesion: Number((ses as any).id_sesion),
+    correctas,
+    puntaje: Number((ses as any).puntaje_porcentaje),
+    resumenReto, // { id_reto, jugadores: [{id_usuario, correctas, tiempo_total_seg}], ganador }
   }
 }
 
 
-  /* LISTAR RETOS (RECIBIDOS/ENVIADOS) */
+  /* ===================== ESTADO DEL RETO ===================== */
+  async estadoReto(id_reto: number) {
+    const reto = await Reto.findOrFail(id_reto)
+
+    // Participantes
+    let participantes: number[] = []
+    const rawPart = (reto as any).participantes_json
+    if (Array.isArray(rawPart)) {
+      participantes = rawPart.map(Number).filter(Number.isFinite)
+    } else if (typeof rawPart === 'string') {
+      try {
+        const p = JSON.parse(rawPart)
+        if (Array.isArray(p)) participantes = p.map(Number).filter(Number.isFinite)
+      } catch {
+        const asCsv = rawPart.split(/[\s,;|]+/).map(Number).filter(Number.isFinite)
+        if (asCsv.length) participantes = asCsv
+      }
+    }
+
+    // Sesiones mapeadas
+    let mapSesiones: Array<{ id_usuario: number; id_sesion: number; correctas?: number }> = []
+    const rawRes = (reto as any).resultados_json
+    if (rawRes && typeof rawRes === 'object' && Array.isArray(rawRes.sesiones_por_usuario)) {
+      mapSesiones = rawRes.sesiones_por_usuario
+    } else if (typeof rawRes === 'string') {
+      try {
+        const r = JSON.parse(rawRes)
+        if (Array.isArray(r?.sesiones_por_usuario)) mapSesiones = r.sesiones_por_usuario
+      } catch {}
+    }
+
+    // Resumen por jugador
+    const jugadores: Array<{ id_usuario: number; correctas: number; tiempo_total_seg: number }> = []
+
+    for (const uid of participantes) {
+      const entry = mapSesiones.find((x) => Number(x.id_usuario) === Number(uid))
+      let ses = null
+
+      if (entry) {
+        ses = await Sesion.find(entry.id_sesion)
+      } else {
+        ses = await Sesion.query()
+          .where('tipo', 'reto')
+          .where('id_usuario', uid)
+          .orderBy('inicio_at', 'desc')
+          .first()
+      }
+
+      if (!ses) continue
+
+      let correctas = Number((ses as any).correctas) || 0
+      let tiempo = 0
+
+      const dets = await SesionDetalle.query().where('id_sesion', Number((ses as any).id_sesion))
+      if (!correctas) {
+        correctas = dets.filter((d: any) => d.es_correcta === true).length
+      }
+      tiempo = dets.reduce((a: number, b: any) => a + (Number(b.tiempo_empleado_seg) || 0), 0)
+
+      jugadores.push({ id_usuario: uid, correctas, tiempo_total_seg: tiempo })
+    }
+
+    // Ganador
+    let ganador: number | null = null
+    if (jugadores.length >= 2) {
+      const [a, b] = jugadores
+      if (a.correctas > b.correctas) ganador = a.id_usuario
+      else if (b.correctas > a.correctas) ganador = b.id_usuario
+      else ganador = a.tiempo_total_seg <= b.tiempo_total_seg ? a.id_usuario : b.id_usuario
+    }
+
+    // Finaliza cuando todos respondieron
+    const respondedAll = jugadores.length >= participantes.length && jugadores.every(j => j.correctas >= 0)
+    if (respondedAll) {
+      let resObj: any = {}
+      try {
+        const raw = (reto as any).resultados_json
+        resObj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+      } catch {}
+      resObj.ganador_id = ganador
+      try {
+        reto.merge({ estado: 'finalizado', resultados_json: resObj })
+        await reto.save()
+      } catch {
+        reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) })
+        await reto.save()
+      }
+    }
+
+    return {
+      id_reto: Number((reto as any).id_reto),
+      estado: String((reto as any).estado),
+      ganador: ganador ?? null,
+      jugadores,
+    }
+  }
+
+  /* ===================== LISTAR RETOS (recibidos/enviados/todos) ===================== */
   async listarRetos(d: {
     id_institucion: number
     user_id: number
@@ -510,71 +602,66 @@ async estadoReto(id_reto: number) {
     estado?: 'pendiente' | 'en_curso' | 'finalizado'
     q?: string
   }) {
-    const tipo = (d.tipo || 'todos') as 'recibidos' | 'enviados' | 'todos';
-    const estados = d.estado ? [d.estado] : ['pendiente', 'en_curso']; // por defecto solo activos
+    const tipo = (d.tipo || 'todos') as 'recibidos' | 'enviados' | 'todos'
+    const estados = d.estado ? [d.estado] : ['pendiente', 'en_curso']
 
-    // 1) Traemos los retos de la institución en estados deseados
     const rows = await Reto.query()
       .where('id_institucion', d.id_institucion)
       .whereIn('estado', estados)
-      .orderBy('id_reto', 'desc');
+      .orderBy('id_reto', 'desc')
 
-    // 2) Filtramos por rol (enviados/recibidos/todos) del usuario
     const mine = rows.filter((r: any) => {
-      const creadorId = Number(r.creado_por);
-      const parts = parseIds(r.participantes_json);
-      const soyParticipante = parts.includes(d.user_id);
-      if (tipo === 'enviados')   return creadorId === d.user_id;
-      if (tipo === 'recibidos')  return creadorId !== d.user_id && soyParticipante;
-      return creadorId === d.user_id || soyParticipante; // todos
-    });
+      const creadorId = Number(r.creado_por)
+      const parts = parseIds(r.participantes_json)
+      const soyParticipante = parts.includes(d.user_id)
+      if (tipo === 'enviados')   return creadorId === d.user_id
+      if (tipo === 'recibidos')  return creadorId !== d.user_id && soyParticipante
+      return creadorId === d.user_id || soyParticipante
+    })
 
-    if (mine.length === 0) return [];
+    if (mine.length === 0) return []
 
-    // 3) Cargamos usuarios involucrados para armar nombres
-    const idsUsuarios = new Set<number>();
+    const idsUsuarios = new Set<number>()
     for (const r of mine) {
-      idsUsuarios.add(Number((r as any).creado_por));
-      parseIds((r as any).participantes_json).forEach((x) => idsUsuarios.add(x));
+      idsUsuarios.add(Number((r as any).creado_por))
+      parseIds((r as any).participantes_json).forEach((x) => idsUsuarios.add(x))
     }
     const usuarios = idsUsuarios.size
       ? await Usuario.query().whereIn('id_usuario', Array.from(idsUsuarios))
-      : [];
-    const byId = new Map<number, any>();
-    for (const u of usuarios) byId.set(Number((u as any).id_usuario), u);
+      : []
+    const byId = new Map<number, any>()
+    for (const u of usuarios) byId.set(Number((u as any).id_usuario), u)
 
-    // 4) Mapeamos la respuesta amigable
     const res = mine.map((r: any) => {
-      const idReto   = Number(r.id_reto);
-      const area     = String(r.area || '');
-      const estadoR  = String(r.estado || '');
-      const creadorId = Number(r.creado_por);
-      const parts    = parseIds(r.participantes_json);
-      const oppId    = parts.find((id) => id !== creadorId);  // puede ser undefined
+      const idReto   = Number(r.id_reto)
+      const area     = String(r.area || '')
+      const estadoR  = String(r.estado || '')
+      const creadorId = Number(r.creado_por)
+      const parts    = parseIds(r.participantes_json)
+      const oppId    = parts.find((id) => id !== creadorId)
 
-      const creador  = mkNom(byId.get(creadorId));
-      const oponente = (typeof oppId === 'number') ? mkNom(byId.get(oppId)) : null;
+      const creador  = mkNom(byId.get(creadorId))
+      const oponente = (typeof oppId === 'number') ? mkNom(byId.get(oppId)) : null
 
       return {
         id_reto: idReto,
         area,
-        estado: estadoR, // 'pendiente' | 'en_curso' | 'finalizado'
+        estado: estadoR,
         creado_en: r.createdAt?.toISO?.() || r.created_at || null,
         creador,
         oponente,
-      };
-    });
+      }
+    })
 
-    // 5) Filtro de búsqueda opcional (area/nombres)
     if (d.q && d.q.trim()) {
-      const term = d.q.trim().toLowerCase();
+      const term = d.q.trim().toLowerCase()
       return res.filter((it) =>
         (it.area || '').toLowerCase().includes(term) ||
         (it.creador?.nombre || '').toLowerCase().includes(term) ||
         (it.oponente?.nombre || '').toLowerCase().includes(term),
-      );
+      )
     }
 
-    return res;
+    return res
   }
 }

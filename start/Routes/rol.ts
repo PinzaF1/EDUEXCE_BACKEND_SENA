@@ -75,18 +75,13 @@ Route.get('movil/logros', (ctx) => new MovilController().misLogros(ctx)).use(onl
 Route.post('movil/logros/otorgar-area', (ctx) => new MovilController().otorgarInsigniaArea(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/logros/todos', (ctx) => new MovilController().logrosTodos(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
-
-
-Route.group(() => {
-  Route.get('oponentes', (ctx) => new MovilController().listarOponentes(ctx))
-  Route.get('retos', (ctx) => new MovilController().listarRetos(ctx))              // ← NUEVO
-  Route.post('retos', (ctx) => new MovilController().crearReto(ctx))
-  Route.post('retos/:id_reto/aceptar', (ctx) => new MovilController().aceptarReto(ctx))
-  Route.post('retos/ronda', (ctx) => new MovilController().responderRonda(ctx))
-  Route.get('retos/:id_reto/estado', (ctx) => new MovilController().estadoReto(ctx))
-})
-.prefix('/movil')
-.use(onlyRol({ rol: 'estudiante' }))
+// RETO 1 VS 1
+Route.get('movil/retos/oponentes', (ctx) => new MovilController().listarOponentes(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/retos', (ctx) => new MovilController().crearReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/retos/:id_reto/aceptar', (ctx) => new MovilController().aceptarReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/retos/ronda', (ctx) => new MovilController().responderRonda(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/retos/:id_reto/estado', (ctx) => new MovilController().estadoReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/retos', (ctx) => new MovilController().listarRetos(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 
 
