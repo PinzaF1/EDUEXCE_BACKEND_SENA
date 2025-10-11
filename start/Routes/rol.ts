@@ -86,7 +86,7 @@ Route.get('movil/retos', (ctx) => new MovilController().listarRetos(ctx)).use(on
 //PERFIL DEL ESTUDIANTE
 
 Route.put('movil/perfil/:id', (ctx) => new MovilController().editarMiPerfilContacto(ctx)).use(onlyRol({ rol: 'estudiante' }))
-Route.put('movil/password', (ctx) => new MovilController().cambiarPasswordEstudiante(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/password', (ctx) => new MovilController().cambiarPasswordEstudiante(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 
 
