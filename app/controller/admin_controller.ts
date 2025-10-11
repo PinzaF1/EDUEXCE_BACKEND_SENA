@@ -74,25 +74,35 @@ class AdminController {
     return ctx.response.ok(data)
   }
 
+  // PUT /admin/estudiantes/:id
   public async editarEstudiante({ request, response }: HttpContext) {
-    const id = Number(request.param('id'))
-    const cambios = request.only([
-      'tipo_documento',
-      'numero_documento',
-      'correo',
-      'direccion',
-      'telefono',
-      'grado',
-      'curso',
-      'jornada',
-      'nombre',
-      'apellido',
-      'is_active',
-    ]) as any
+    try {
+      const id = Number(request.param('id'))
+      const cambios = request.only([
+        'tipo_documento',
+        'numero_documento',
+        'correo',
+        'direccion',
+        'telefono',
+        'grado',
+        'curso',
+        'jornada',
+        'nombre',
+        'apellido',
+        'is_activo', // ajusta si en DB es is_active
+      ]) as any
 
-    const data = await estudiantesService.editar(id, cambios)
-    return response.ok(data)
+      const auth = (request as any).authUsuario
+      const data = await estudiantesService.editarComoAdmin(id, cambios, {
+        id_institucion: Number(auth?.id_institucion),
+      })
+
+      return response.ok(data)
+    } catch (e: any) {
+      return response.badRequest({ error: e?.message || 'No se pudo editar' })
+    }
   }
+
 
   public async eliminarEstudiante({ request, response }: HttpContext) {
     const id = Number(request.param('id'))

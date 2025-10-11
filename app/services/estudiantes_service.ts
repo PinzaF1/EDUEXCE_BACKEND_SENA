@@ -51,7 +51,6 @@ export default class EstudiantesService {
     return `${numero_documento}${(apellido || '').toLowerCase().slice(-3)}`
   }
 
-  
 
   // ===== Crear/actualizar 1 estudiante (admin) =====
   async crearUno(d: {
@@ -599,4 +598,103 @@ private async perfilDesdeId(id_usuario: number) {
       return { estado: 'eliminado' as const }
     }
   }
+
+     /** ADMIN: puede editar todos estos campos (ajusta is_activo/is_active según tu DB) */
+  public async editarComoAdmin(
+    id: number,
+    payload: {
+      tipo_documento?: string
+      numero_documento?: string
+      correo?: string
+      direccion?: string
+      telefono?: string
+      grado?: string | number | null
+      curso?: string | null
+      jornada?: string | null
+      nombre?: string
+      apellido?: string
+      is_activo?: boolean
+    },
+    ctx?: { id_institucion?: number } // opcional: validar pertenencia
+  ) {
+    if (!Number.isFinite(id)) throw new Error('ID inválido')
+
+    // normalizar
+    const cambios: any = { ...payload }
+    if (typeof cambios.correo === 'string') cambios.correo = normEmail(cambios.correo)
+    if (typeof cambios.numero_documento === 'string') cambios.numero_documento = clean(cambios.numero_documento)
+    if (typeof cambios.tipo_documento === 'string') cambios.tipo_documento = up(cambios.tipo_documento)
+    if (typeof cambios.nombre === 'string') cambios.nombre = clean(cambios.nombre)
+    if (typeof cambios.apellido === 'string') cambios.apellido = clean(cambios.apellido)
+    if (typeof cambios.direccion === 'string') cambios.direccion = clean(cambios.direccion)
+    if (typeof cambios.telefono === 'string') cambios.telefono = clean(cambios.telefono)
+    if (typeof cambios.grado !== 'undefined') cambios.grado = normGrado(cambios.grado)
+    if (typeof cambios.curso !== 'undefined') cambios.curso = normCurso(cambios.curso)
+    if (typeof cambios.jornada !== 'undefined') cambios.jornada = normJornada(cambios.jornada)
+
+    const est = await Usuario.find(id)
+    if (!est) throw new Error('Estudiante no encontrado')
+
+    // validar pertenencia (opcional)
+    if (ctx?.id_institucion != null) {
+      const mismoColegio = Number((est as any).id_institucion) === Number(ctx.id_institucion)
+      if (!mismoColegio) throw new Error('No autorizado para editar estudiantes de otra institución')
+    }
+
+    est.merge(cambios as any)
+    await est.save()
+    return est
+  }
+
+  /** ESTUDIANTE: solo puede editar correo, direccion y telefono */
+  public async editarComoEstudiante(
+    id: number,
+    payload: { correo?: string; direccion?: string; telefono?: string },
+    ctx: { id_usuario: number } // para validar que sea su propio registro
+  ) {
+    if (!Number.isFinite(id)) throw new Error('ID inválido')
+
+    // normalizar
+    const cambios: any = {}
+    if (payload?.correo !== undefined) cambios.correo = normEmail(payload.correo)
+    if (payload?.direccion !== undefined) cambios.direccion = clean(payload.direccion)
+    if (payload?.telefono !== undefined) cambios.telefono = clean(payload.telefono)
+
+    const est = await Usuario.find(id)
+    if (!est) throw new Error('Estudiante no encontrado')
+
+    // asegurar que edita su propio registro
+    const esPropio = Number((est as any).id_usuario) === Number(ctx.id_usuario)
+    if (!esPropio) throw new Error('No autorizado para editar este estudiante')
+
+    est.merge(cambios)
+    await est.save()
+    return est
+  }
+
+   public async cambiarPasswordEstudiante(id_usuario: number, actual: string, nueva: string) {
+    if (!Number.isFinite(id_usuario)) throw new Error('Usuario inválido')
+    if (!actual || !nueva) throw new Error('actual y nueva son obligatorias')
+
+    const user = await Usuario.findOrFail(id_usuario)
+
+    // soporta distintos nombres de columna, ajusta según tu modelo
+    const storedHash =
+      (user as any).password ?? (user as any).password_hash ?? (user as any).clave ?? null
+
+    if (!storedHash || typeof storedHash !== 'string' || storedHash.length < 20) {
+      // si no hay hash, es mejor abortar con mensaje claro
+      throw new Error('El usuario no tiene una contraseña registrada')
+    }
+
+    const ok = await bcrypt.compare(String(actual), storedHash)
+    if (!ok) return false
+
+    ;(user as any).password = await bcrypt.hash(String(nueva), 10)
+    await user.save()
+    return true
+  }
 }
+
+
+

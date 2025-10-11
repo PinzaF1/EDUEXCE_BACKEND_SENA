@@ -77,10 +77,9 @@ export default class RegistroService {
       telefono,
       jornada,
       correo,
-      password: hash,          // el modelo Institucion usa 'password'
-      logo_url: (null as any), // explícito para que no quede undefined
-      is_activo: true as any,  // en tu modelo la columna es is_activo (boolean)
+      password: hash,
     } as any)
+
 
     // Autologin post-registro (EP-01 HU-02)
     const token = jwt.sign(

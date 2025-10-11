@@ -529,6 +529,46 @@ public async listarRetos({ request, response }: HttpContext) {
     return response.ok({ id_usuario: Number(auth.id_usuario), ...data })
   }
 
+    // PUT /movil/mi-perfil/:id  -> estudiante: SOLO correo, direccion, telefono
+  public async editarMiPerfilContacto({ request, response }: HttpContext) {
+    try {
+      const id = Number(request.param('id'))
+      const cambios = request.only(['correo', 'direccion', 'telefono']) as any
+      const auth = (request as any).authUsuario
+
+      const data = await estudiantesService.editarComoEstudiante(id, cambios, {
+        id_usuario: Number(auth?.id_usuario),
+      })
+
+      return response.ok(data)
+    } catch (e: any) {
+      return response.badRequest({ error: e?.message || 'No se pudo actualizar' })
+    }
+  }
+
+   public async cambiarPasswordEstudiante({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const { actual, nueva } = request.body() as any
+
+    // 1) Validación de body
+    if (!actual || !nueva) {
+      return response.badRequest({ error: 'Los campos "actual" y "nueva" son obligatorios' })
+    }
+
+    try {
+      const ok = await estudiantesService.cambiarPasswordEstudiante(
+        Number(auth.id_usuario),
+        String(actual),
+        String(nueva)
+      )
+      return ok
+        ? response.ok({ ok: true })
+        : response.badRequest({ error: 'Contraseña actual incorrecta' })
+    } catch (e: any) {
+      return response.badRequest({ error: e?.message || 'No se pudo cambiar la contraseña' })
+    }
+  }
 }
+
 
 export default MovilController
