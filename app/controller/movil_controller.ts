@@ -547,27 +547,34 @@ public async listarRetos({ request, response }: HttpContext) {
   }
 
    public async cambiarPasswordEstudiante({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const { actual, nueva } = request.body() as any
+  const auth = (request as any).authUsuario;
+  const { actual, nueva } = request.body() as any;
 
-    // 1) Validación de body
-    if (!actual || !nueva) {
-      return response.badRequest({ error: 'Los campos "actual" y "nueva" son obligatorios' })
-    }
-
-    try {
-      const ok = await estudiantesService.cambiarPasswordEstudiante(
-        Number(auth.id_usuario),
-        String(actual),
-        String(nueva)
-      )
-      return ok
-        ? response.ok({ ok: true })
-        : response.badRequest({ error: 'Contraseña actual incorrecta' })
-    } catch (e: any) {
-      return response.badRequest({ error: e?.message || 'No se pudo cambiar la contraseña' })
-    }
+  
+  if (!actual || !nueva) {
+    return response.badRequest({ error: 'Los campos "actual" y "nueva" son obligatorios' });
   }
+
+  try {
+    console.log(' Usuario autenticado:', auth?.id_usuario);
+
+  
+    const ok = await estudiantesService.cambiarPasswordEstudiante(
+      Number(auth.id_usuario),
+      String(actual),
+      String(nueva)
+    );
+
+  
+    return ok
+      ? response.ok({ ok: true })
+      : response.badRequest({ error: 'Contraseña actual incorrecta' });
+  } catch (e: any) {
+    console.error(' Error al cambiar contraseña:', e?.message);
+    return response.badRequest({ error: e?.message || 'No se pudo cambiar la contraseña' });
+  }
+}
+
 }
 
 

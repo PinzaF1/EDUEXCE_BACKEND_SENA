@@ -673,27 +673,34 @@ private async perfilDesdeId(id_usuario: number) {
   }
 
    public async cambiarPasswordEstudiante(id_usuario: number, actual: string, nueva: string) {
-    if (!Number.isFinite(id_usuario)) throw new Error('Usuario inválido')
-    if (!actual || !nueva) throw new Error('actual y nueva son obligatorias')
+  if (!Number.isFinite(id_usuario)) throw new Error('Usuario inválido');
+  if (!actual || !nueva) throw new Error('actual y nueva son obligatorias');
 
-    const user = await Usuario.findOrFail(id_usuario)
+  const user = await Usuario.findOrFail(id_usuario);
+  const storedHash =
+    (user as any).password_hash ??
+    (user as any).password ??
+    (user as any).clave ??
+    null;
 
-    // soporta distintos nombres de columna, ajusta según tu modelo
-    const storedHash =
-      (user as any).password ?? (user as any).password_hash ?? (user as any).clave ?? null
-
-    if (!storedHash || typeof storedHash !== 'string' || storedHash.length < 20) {
-      // si no hay hash, es mejor abortar con mensaje claro
-      throw new Error('El usuario no tiene una contraseña registrada')
-    }
-
-    const ok = await bcrypt.compare(String(actual), storedHash)
-    if (!ok) return false
-
-    ;(user as any).password = await bcrypt.hash(String(nueva), 10)
-    await user.save()
-    return true
+  if (!storedHash || typeof storedHash !== 'string' || storedHash.length < 20) {
+    throw new Error('El usuario no tiene una contraseña registrada');
   }
+
+  const coincide = await bcrypt.compare(String(actual), storedHash);
+  if (!coincide) {
+    console.log(' Contraseña actual incorrecta');
+    return false;
+  }
+
+  (user as any).password_hash = await bcrypt.hash(String(nueva), 10);
+
+  await user.save();
+  console.log(' Contraseña actualizada correctamente para el usuario:', id_usuario);
+
+  return true;
+}
+
 }
 
 
