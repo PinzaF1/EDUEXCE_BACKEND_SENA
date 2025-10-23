@@ -225,11 +225,11 @@ async crearReto(d: {
 
 
   /* ===================== ACEPTAR RETO ===================== */
-  // ====== RetosService.aceptarReto (service) ======
+  // ====== RetosService.aceptarReto (FIX idempotente) ======
 async aceptarReto(id_reto: number, id_usuario_invitado: number) {
   const reto = await Reto.findOrFail(id_reto)
 
-  // Leer preguntas desde reglas_json
+  // 1) Cargar/asegurar preguntas desde reglas_json
   let preguntas: any[] = []
   try {
     const reglas = typeof (reto as any).reglas_json === 'string'
@@ -237,8 +237,6 @@ async aceptarReto(id_reto: number, id_usuario_invitado: number) {
       : (reto as any).reglas_json || {}
     if (Array.isArray(reglas?.preguntas)) preguntas = reglas.preguntas
   } catch {}
-
-  // Si no hubiera preguntas, generamos y guardamos
   if (!Array.isArray(preguntas) || preguntas.length === 0) {
     const area = (reto as any).area as Area
     const pack = await this.ia.generarPreguntas({
@@ -251,26 +249,44 @@ async aceptarReto(id_reto: number, id_usuario_invitado: number) {
     await reto.save()
   }
 
-  // Participantes (creador + invitado)
-  let participantes: number[] = []
-  try {
-    const raw = (reto as any).participantes_json
-    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw
-    if (Array.isArray(arr)) participantes = arr.map((x: any) => Number(x)).filter(Number.isFinite)
-  } catch {}
+  // 2) Participantes: UNIÓN (existentes + creador + quien acepta)
   const creador = Number((reto as any).creado_por) || null
-  participantes = Array.from(new Set<number>([
-    ...(creador ? [creador] : []),
-    Number(id_usuario_invitado),
-  ]))
 
-  ;(reto as any).participantes_json = participantes
-  ;(reto as any).estado = 'en_curso'
-  await reto.save()
+  const parseIds = (raw: any): number[] => {
+    try {
+      if (Array.isArray(raw)) return raw.map(Number).filter(Number.isFinite)
+      if (typeof raw === 'string') {
+        try { const j = JSON.parse(raw); if (Array.isArray(j)) return j.map(Number).filter(Number.isFinite) } catch {}
+        return raw.split(/[\s,;|]+/).map(Number).filter(Number.isFinite)
+      }
+    } catch {}
+    return []
+  }
 
-  // Crear sesiones para cada participante (sin id_reto en Sesion)
-  const sesiones: Array<{ id_usuario: number; id_sesion: number }> = []
+  const existentes = parseIds((reto as any).participantes_json)
+  const participantes = Array.from(
+    new Set<number>([
+      ...existentes,
+      ...(creador ? [creador] : []),
+      Number(id_usuario_invitado),
+    ])
+  )
+
+  // 3) Leer mapeo sesiones guardado (si ya había)
+  let mapSesiones: Array<{ id_usuario: number; id_sesion: number }> = []
+  try {
+    const raw = (reto as any).resultados_json
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+    if (Array.isArray(obj?.sesiones_por_usuario)) mapSesiones = obj.sesiones_por_usuario
+  } catch {}
+
+  const yaTieneSesion = (uid: number) =>
+    mapSesiones.some((x) => Number(x.id_usuario) === Number(uid))
+
+  // 4) Crear sesiones SOLO para los usuarios sin sesión
   for (const uid of participantes) {
+    if (yaTieneSesion(uid)) continue
+
     const ses = await Sesion.create({
       id_usuario: uid,
       tipo: 'reto',
@@ -293,28 +309,29 @@ async aceptarReto(id_reto: number, id_usuario_invitado: number) {
       } as any)
       orden++
     }
-    sesiones.push({ id_usuario: uid, id_sesion })
+    mapSesiones.push({ id_usuario: uid, id_sesion })
   }
 
-  // Guardar mapeo sesiones<->usuarios en el reto
-  ;(reto as any).resultados_json = { sesiones_por_usuario: sesiones }
+  // 5) Persistir estado, participantes y mapeo de sesiones
+  ;(reto as any).estado = 'en_curso'
+  ;(reto as any).participantes_json = participantes
+  ;(reto as any).resultados_json = { sesiones_por_usuario: mapSesiones }
   await reto.save()
 
+  // 6) Respuesta que tu Android ya consume
   return {
     reto: {
       id_reto: Number((reto as any).id_reto),
       estado: String((reto as any).estado),
       participantes,
     },
-    sesiones,
+    sesiones: mapSesiones,
     preguntas,
   }
 }
 
 
-  /* ===================== RESPONDER RONDA ===================== */
-  /* ===================== RESPONDER RONDA ===================== */
-// Reemplaza SOLO este método en tu service
+
 async responderRonda(d: {
   id_sesion: number
   respuestas: Array<{ orden: number; opcion: string; tiempo_empleado_seg?: number }>
@@ -664,4 +681,141 @@ async responderRonda(d: {
 
     return res
   }
+
+  // === Dentro de export default class RetosService { ... } ===
+
+/** Arranca un reto para un usuario: valida pertenencia, localiza su sesión y entrega la siguiente pregunta */
+async arranqueReto(id_reto: number, id_usuario: number) {
+  const reto = await Reto.findOrFail(id_reto)
+
+  // Helpers locales reutilizando utilidades ya declaradas arriba (parseIds, mkNom, mapPreguntaForClient)
+  const participantes = ((): number[] => {
+    const raw = (reto as any).participantes_json
+    try {
+      if (Array.isArray(raw)) return raw.map(Number).filter(Number.isFinite)
+      if (typeof raw === 'string') {
+        try {
+          const j = JSON.parse(raw)
+          if (Array.isArray(j)) return j.map(Number).filter(Number.isFinite)
+        } catch {
+          return raw.split(/[\s,;|]+/).map(Number).filter(Number.isFinite)
+        }
+      }
+    } catch {}
+    return []
+  })()
+
+  if (!participantes.includes(Number(id_usuario))) {
+    throw new Error('No perteneces a este reto.')
+  }
+
+  // Oponente (para UI)
+  const otroId = participantes.find((id) => Number(id) !== Number(id_usuario)) ?? null
+  let oponente = null as null | {
+    id: number; nombre: string; grado: any; curso: any; foto_url: any
+  }
+  if (otroId) {
+    const u = await Usuario.find(otroId)
+    oponente = mkNom(u) as any
+  }
+
+  // Localizar mi sesión en resultados_json.sesiones_por_usuario
+  let idSesion: number | null = null
+  try {
+    const raw = (reto as any).resultados_json
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+    const arr = Array.isArray(obj?.sesiones_por_usuario) ? obj.sesiones_por_usuario : []
+    const mine = arr.find((x: any) => Number(x.id_usuario) === Number(id_usuario))
+    if (mine) idSesion = Number(mine.id_sesion)
+  } catch {}
+
+  // Si no hay sesión, debe aceptar primero
+  if (!idSesion) {
+    return {
+      id_reto: Number((reto as any).id_reto),
+      estado: String((reto as any).estado),
+      requiere_aceptar: true,
+      mensaje: 'Debes aceptar el reto para iniciar.',
+      oponente,
+    }
+  }
+
+  // Cargar sesión y detalles
+  const ses = await Sesion.find(idSesion)
+  if (!ses) {
+    return {
+      id_reto: Number((reto as any).id_reto),
+      estado: String((reto as any).estado),
+      requiere_aceptar: true,
+      mensaje: 'Sesión no encontrada. Vuelve a aceptar el reto.',
+      oponente,
+    }
+  }
+
+  const detalles = await SesionDetalle.query()
+    .where('id_sesion', Number(idSesion))
+    .orderBy('orden', 'asc')
+
+  const total = Number((ses as any).total_preguntas) || detalles.length || 0
+  const respondidas = detalles.filter((d: any) => d.alternativa_elegida != null).length
+  const siguiente = detalles.find((d: any) => d.alternativa_elegida == null) || null
+
+  if (siguiente) {
+    const banco = await BancoPregunta.find(Number((siguiente as any).id_pregunta))
+    const base = banco
+      ? {
+          id_pregunta: Number((banco as any).id_pregunta),
+          area: (banco as any).area,
+          subtema: (banco as any).subtema,
+          dificultad: (banco as any).dificultad,
+          pregunta: (banco as any).pregunta,
+          opciones: (banco as any).opciones,
+          time_limit_seconds: (siguiente as any).tiempo_asignado_seg ?? null,
+        }
+      : {
+          id_pregunta: Number((siguiente as any).id_pregunta) || null,
+          area: null,
+          subtema: null,
+          dificultad: null,
+          pregunta: null,
+          opciones: null,
+          time_limit_seconds: (siguiente as any).tiempo_asignado_seg ?? null,
+        }
+
+    return {
+      id_reto: Number((reto as any).id_reto),
+      estado: String((reto as any).estado),
+      mi_sesion: {
+        id_sesion: Number(idSesion),
+        total_preguntas: total,
+        respondidas,
+        siguiente_orden: Number((siguiente as any).orden),
+        progreso_porcentaje: Math.round((respondidas * 100) / Math.max(1, total)),
+      },
+      pregunta_actual: {
+        orden: Number((siguiente as any).orden),
+        ...mapPreguntaForClient(base),
+      },
+      oponente,
+    }
+  }
+
+  // Si no hay siguiente pregunta, ya terminó: devolver resumen
+  const resumen = await this.estadoReto(Number((reto as any).id_reto))
+
+  return {
+    id_reto: Number((reto as any).id_reto),
+    estado: 'finalizado',
+    mi_sesion: {
+      id_sesion: Number(idSesion),
+      total_preguntas: total,
+      respondidas,
+      siguiente_orden: null,
+      progreso_porcentaje: 100,
+    },
+    resumenReto: resumen,
+    oponente,
+  }
+}
+
 }

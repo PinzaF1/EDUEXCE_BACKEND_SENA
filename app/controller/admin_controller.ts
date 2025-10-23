@@ -74,34 +74,37 @@ class AdminController {
     return ctx.response.ok(data)
   }
 
-  // PUT /admin/estudiantes/:id
-  public async editarEstudiante({ request, response }: HttpContext) {
-    try {
-      const id = Number(request.param('id'))
-      const cambios = request.only([
-        'tipo_documento',
-        'numero_documento',
-        'correo',
-        'direccion',
-        'telefono',
-        'grado',
-        'curso',
-        'jornada',
-        'nombre',
-        'apellido',
-        'is_activo', // ajusta si en DB es is_active
-      ]) as any
+ // PUT /admin/estudiantes/:id
+public async editarEstudiante({ request, response }: HttpContext) {
+  try {
+    const id = Number(request.param('id'))
 
-      const auth = (request as any).authUsuario
-      const data = await estudiantesService.editarComoAdmin(id, cambios, {
-        id_institucion: Number(auth?.id_institucion),
-      })
+    // 👇 aceptar ambos alias para el booleano
+    const cambios = request.only([
+      'tipo_documento',
+      'numero_documento',
+      'correo',
+      'direccion',
+      'telefono',
+      'grado',
+      'curso',
+      'jornada',
+      'nombre',
+      'apellido',
+      'is_activo',
+      'is_active', // <— añade esto
+    ]) as any
 
-      return response.ok(data)
-    } catch (e: any) {
-      return response.badRequest({ error: e?.message || 'No se pudo editar' })
-    }
+    const auth = (request as any).authUsuario
+    const data = await estudiantesService.editarComoAdmin(id, cambios, {
+      id_institucion: Number(auth?.id_institucion),
+    })
+
+    return response.ok(data)
+  } catch (e: any) {
+    return response.badRequest({ error: e?.message || 'No se pudo editar' })
   }
+}
 
 
   public async eliminarEstudiante({ request, response }: HttpContext) {
@@ -236,38 +239,37 @@ class AdminController {
     return response.ok(data)
   }
 
-  // ====== WEB: Cards de estudiantes activos por área (en vivo) ======
-  public async webAreasActivos({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const data = await (dashboardService as any).tarjetasPorArea(Number(auth.id_institucion))
-    const areas = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles'] as const
-    const islas = areas.map((area) => ({ area, activos: (data as any)[area] || 0 }))
-    return response.ok({ islas })
-  }
+ 
+// ====== WEB: Cards de estudiantes activos por área (en vivo)
+public async webAreasActivos({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const q = request.qs() as any
+  const ventanaMin = q.ventana_min ? Number(q.ventana_min) : 10
 
-  // ====== WEB: Serie Progreso por Área (últimos N meses) ======
-  public async webSerieProgresoPorArea({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const meses = Number((request.qs() as any).meses ?? 6)
-    const series = await (dashboardService as any).progresoMensualPorArea(Number(auth.id_institucion), meses)
-    const flat = Object.entries(series).flatMap(([area, puntos]: any) =>
-      (puntos as any[]).map((p: any) => ({ mes: p.mes, area, valor: p.promedio }))
-    )
-    return response.ok({ series: flat })
-  }
+  // usa el método EN VIVO
+  const data = await (seguimientoService as any).areasActivosEnVivo(
+    Number(auth.id_institucion),
+    ventanaMin
+  )
+  return response.ok(data) // { islas: [{ area, activos }] }
+}
 
-  // ====== WEB: Rendimiento por Área (mes actual) ======
-  public async webRendimientoPorArea({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const now = new Date()
-    const rend = await (dashboardService as any).rendimientoDelMes(
-      Number(auth.id_institucion),
-      now.getFullYear(),
-      now.getMonth() + 1
-    )
-    const items = Object.entries(rend).map(([area, promedio]) => ({ area, promedio }))
-    return response.ok({ items })
-  }
+
+// ====== WEB: Serie Progreso por Área (últimos N meses)
+public async webSerieProgresoPorArea({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const meses = Number((request.qs() as any).meses ?? 6)
+  const data = await (seguimientoService as any).seriesProgresoPorArea(Number(auth.id_institucion), meses)
+  return response.ok(data) // { series: [{ mes: 'YYYY-MM', area: 'Matematicas'|..., promedio: number }] }
+}
+
+// ====== WEB: Rendimiento por Área (mes actual)
+public async webRendimientoPorArea({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await (seguimientoService as any).rendimientoPorArea(Number(auth.id_institucion))
+  return response.ok(data) // { items: [{ area: 'Matematicas'|..., promedio: number }] }
+}
+
 }
 
 export default AdminController

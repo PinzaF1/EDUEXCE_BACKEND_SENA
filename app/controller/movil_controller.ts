@@ -26,20 +26,24 @@ class MovilController {
     return response.ok(data)
   }
 
-  public async actualizarPerfilContacto({ request, response }: HttpContext) {
-    try {
-      const auth = (request as any).authUsuario
-      const { correo, telefono, direccion } = request.only(['correo', 'telefono', 'direccion'])
-      const data = await estudiantesService.actualizarContacto(Number(auth.id_usuario), {
-        correo,
-        telefono,
-        direccion,
-      })
-      return response.ok(data)
-    } catch (e: any) {
-      return response.badRequest({ error: e?.message || 'No se pudo actualizar' })
-    }
+ public async actualizarPerfilContacto({ request, response }: HttpContext) {
+  try {
+    const auth = (request as any).authUsuario
+    //  incluir foto_url
+    const { correo, telefono, direccion, foto_url } = request.only(['correo', 'telefono', 'direccion', 'foto_url'])
+    const data = await estudiantesService.actualizarContacto(Number(auth.id_usuario), {
+      correo,
+      telefono,
+      direccion,
+      //  pasarla al service
+      foto_url,
+    })
+    return response.ok(data)
+  } catch (e: any) {
+    return response.badRequest({ error: e?.message || 'No se pudo actualizar' })
   }
+}
+
 
   /* TEST DE KOLB */
 
@@ -65,59 +69,104 @@ class MovilController {
         documento: res.alumno?.numero_documento ?? null,
         fecha: res.fecha_presentacion,
         estilo: res.estilo,
-        totales: res.totales, // { ec, or, ca, ea, ac_ce, ae_ro, estiloCalculado }
+        totales: res.totales, 
       })
     }
 
-    // ============ PARADAS / PRÁCTICAS ============
-public async crearParada({ request, response }: HttpContext) {
+  public async crearParada({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
-  const p = request.only(['area', 'subtema', 'nivel_orden', 'usa_estilo_kolb', 'intento_actual']) as any
+  const p = request.only(['area', 'subtema', 'nivel_orden', 'intento_actual']) as any
 
-  const area = String(p.area ?? '').trim()
+  const areaIn = String(p.area ?? '').trim()
   const subtema = String(p.subtema ?? '').trim()
-  if (!area || !subtema) {
+  if (!areaIn || !subtema) {
     return response.badRequest({ error: 'Los campos "area" y "subtema" son obligatorios' })
   }
 
-  // default solicitado: usaEstiloKolb = true si no viene
-  const usaEstiloKolb = p.usa_estilo_kolb === undefined ? true : !!p.usa_estilo_kolb
+  const areaCanon = (() => {
+    const t = areaIn.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase()
+    if (t.startsWith('mate')) return 'Matematicas'
+    if (t.startsWith('leng') || t.startsWith('lect')) return 'Lenguaje'
+    if (t.startsWith('cien')) return 'Ciencias'
+    if (t.startsWith('soci')) return 'sociales'
+    if (t.startsWith('ing'))  return 'Ingles'
+    return 'Sociales'
+  })() as 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'sociales' | 'Ingles'
+
+  const normEstilo = (s: any):
+    'Divergente' | 'Asimilador' | 'Convergente' | 'Acomodador' | null => {
+    const v = String(s || '').trim().toLowerCase()
+    if (!v) return null
+    if (v.startsWith('diver')) return 'Divergente'
+    if (v.startsWith('asim')) return 'Asimilador'
+    if (v.startsWith('conv')) return 'Convergente'
+    if (v.startsWith('acom')) return 'Acomodador'
+    return null
+  }
+
+  let estiloKolbName =
+    normEstilo(
+      (auth as any)?.estilo_kolb ??
+      (auth as any)?.estiloKolb ??
+      (auth as any)?.kolb ??
+      (auth as any)?.estilo ??
+      (auth as any)?.perfil?.estilo_kolb
+    )
+
+  if (!estiloKolbName) {
+    try {
+      const r = await kolbService.obtenerResultado(Number(auth.id_usuario))
+      estiloKolbName =
+        normEstilo((r as any)?.estilo) ||
+        normEstilo((r as any)?.totales?.estiloCalculado) ||
+        null
+    } catch {}
+  }
+
+  if (!estiloKolbName) {
+    estiloKolbName = normEstilo((request.input('estilo_kolb') || request.input('estiloKolb')))
+  }
 
   const data = await sesionesService.crearParada({
     id_usuario: Number(auth.id_usuario),
-    area,
+    area: areaCanon,
     subtema,
     nivel_orden: Number(p.nivel_orden ?? 1),
-    usa_estilo_kolb: usaEstiloKolb,
+    usa_estilo_kolb: true,
+    estilo_kolb: estiloKolbName || undefined,
     intento_actual: Number(p.intento_actual ?? 1),
   } as any)
 
   const ses = data.sesion as any
   const preguntas = Array.isArray(data.preguntas) ? data.preguntas : []
 
-  // response limpio de la 1ª ruta SIN el campo "preguntas"
-  const payload = {
+  const preguntasOut = preguntas.map((q: any) => ({
+    id_pregunta: q.id_pregunta,
+    area: q.area,
+    subtema,
+    enunciado: q.enunciado ?? q.pregunta,
+    opciones: q.opciones,
+  }))
+
+  return response.created({
     sesion: {
       idSesion: String(ses.id_sesion),
       idUsuario: String(ses.id_usuario),
       tipo: 'practica',
-      area: area.toLowerCase(),
+      area: areaCanon.toLowerCase(),
       subtema,
       nivelOrden: Number(p.nivel_orden ?? 1),
       modo: 'estandar',
-      usaEstiloKolb: usaEstiloKolb,
+      estiloKolb: estiloKolbName ?? null,
       inicioAt: ses.inicio_at,
-      totalPreguntas: preguntas.length,
-      // ÚNICA lista con las 5 preguntas:
-      preguntasPorSubtema: preguntas,
+      totalPreguntas: preguntasOut.length,
+      preguntasPorSubtema: preguntasOut,
     }
-  }
-
-  return response.created(payload)
+  })
 }
 
-
-  public async cerrarSesion({ request, response }: HttpContext) {
+  /* ========= CONTROLLER: cerrarSesion ========= */
+public async cerrarSesion({ request, response }: HttpContext) {
   try {
     const body = request.only(['id_sesion', 'respuestas']) as any
     const id_sesion = Number(body.id_sesion)
@@ -125,26 +174,28 @@ public async crearParada({ request, response }: HttpContext) {
 
     const inResps = Array.isArray(body.respuestas) ? body.respuestas : []
     const respuestas = inResps.map((r: any) => {
-      if (r?.orden != null) {
-        return {
-          orden: Number(r.orden),
-          opcion: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
-          tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
-        }
+      const opcion = String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '')
+        .trim()
+        .toUpperCase()
+
+      return {
+        orden: r.orden != null ? Number(r.orden) : null,
+        id_pregunta:
+          r.id_pregunta != null
+            ? Number(r.id_pregunta)
+            : (Number(r.idPregunta ?? r.id ?? NaN) || null),
+        opcion,
+        tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
       }
-      return r
     })
 
-    const data = await sesionesService.cerrarSesion({
-      id_sesion,
-      respuestas,
-    } as any)
-
+    const data = await sesionesService.cerrarSesion({ id_sesion, respuestas } as any)
     return response.ok(data)
   } catch (e: any) {
     return response.badRequest({ error: e?.message || 'No se pudo cerrar la sesión' })
   }
 }
+
 
 public async detalleSesion({ request, response }: HttpContext) {
   const id_sesion = Number(request.param('id_sesion'))
@@ -205,7 +256,7 @@ public async crearSimulacro({ request, response }: HttpContext) {
 
 
 // POST /movil/simulacro/cerrar
-// POST /movil/simulacro/cerrar  -> recibe respuestas, califica y cierra
+
 public async cerrarSimulacro({ request, response }: HttpContext) {
   try {
     const body = request.only(['id_sesion', 'respuestas']) as any
@@ -216,7 +267,7 @@ public async cerrarSimulacro({ request, response }: HttpContext) {
       return response.badRequest({ error: 'id_sesion y respuestas son obligatorios' })
     }
 
-    // ⬇️ NORMALIZACIÓN CORRECTA: acepta {orden,...} o {id_pregunta,...}
+    //  NORMALIZACIÓN CORRECTA: acepta {orden,...} o {id_pregunta,...}
     const respuestas = inResps.map((r: any) => {
       if (r?.orden != null) {
         return {
@@ -292,30 +343,40 @@ public async islaSimulacroCerrar({ request, response }: HttpContext) {
   }
 
   const respuestas = inResps.map((r: any) => {
-    if (r?.orden != null) {
-      return {
-        orden: Number(r.orden),
-        opcion: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
-        tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
-      }
-    }
+  if (r?.orden != null) {
     return {
-      id_pregunta: Number(r.id_pregunta ?? r.id ?? r.idPregunta ?? NaN),
-      respuesta: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
+      orden: Number(r.orden),
+      opcion: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '')
+        .toUpperCase(),
       tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
     }
-  })
-
+  }
+  // Acepta también { id_pregunta, respuesta }
+  return {
+    id_pregunta: Number(r.id_pregunta ?? r.id ?? r.idPregunta ?? NaN),
+    respuesta: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '')
+      .toUpperCase(),
+    tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
+  }
+})
   const data = await (sesionesService as any).cerrarSimulacroMixto({ id_sesion, respuestas })
   return response.ok(data)
 }
 
 public async islaSimulacroResumen({ request, response }: HttpContext) {
-  const id_sesion = Number(request.param('id_sesion'))
-  const data = await (sesionesService as any).resumenResultadoSimulacro(id_sesion)
+  const raw = request.param('id_sesion')
+  const id_sesion = Number.parseInt(String(raw), 10)
+
+  if (!Number.isFinite(id_sesion) || id_sesion <= 0) {
+    return response.badRequest({ error: 'id_sesion es obligatorio y debe ser numérico' })
+  }
+
+  // Reutilizamos el detalle que ya arma header/resumen/análisis
+  const data = await sesionesService.detalleSesion(id_sesion)
   if (!data) return response.notFound({ error: 'Simulacro no encontrado' })
   return response.ok(data)
 }
+
 
   // PROGRESO
 public async progresoResumen({ request, response }: HttpContext) {
@@ -409,8 +470,7 @@ public async listarOponentes({ request, response }: HttpContext) {
   return response.ok(data)
 }
 
-/** POST /movil/retos  body: { area, oponente_id, cantidad? } */
-/** POST /movil/retos  body: { area, oponente_id, cantidad? } */
+
 public async crearReto({ request, response }: HttpContext) {
   try {
     const auth = (request as any).authUsuario
@@ -432,7 +492,6 @@ public async crearReto({ request, response }: HttpContext) {
 }
 
 
-/** POST /movil/retos/:id_reto/aceptar */
 // ====== Controller: aceptar reto ======
 public async aceptarReto({ request, response }: HttpContext) {
   try {
@@ -504,6 +563,27 @@ public async listarRetos({ request, response }: HttpContext) {
   }
 }
 
+/** GET /movil/retos/:id_reto/arranque */
+public async arranqueReto({ request, response }: HttpContext) {
+  try {
+    const auth = (request as any).authUsuario
+    const idReto = Number(request.param('id_reto'))
+    if (!Number.isFinite(idReto)) {
+      return response.badRequest({ message: 'id_reto inválido' })
+    }
+
+    const data = await retosService.arranqueReto(idReto, Number(auth.id_usuario))
+    return response.ok(data)
+  } catch (err: any) {
+    // Si el service valida pertenencia y lanza error, devolvemos 403 legible
+    if (typeof err?.message === 'string' && /No perteneces a este reto/.test(err.message)) {
+      return response.forbidden({ message: err.message })
+    }
+    return response.internalServerError({ message: err?.message || 'Error al iniciar el reto' })
+  }
+}
+
+
 
 
   // ============ QUIZ INICIAL (DIAGNÓSTICO) ============ 
@@ -529,22 +609,24 @@ public async listarRetos({ request, response }: HttpContext) {
     return response.ok({ id_usuario: Number(auth.id_usuario), ...data })
   }
 
-    // PUT /movil/mi-perfil/:id  -> estudiante: SOLO correo, direccion, telefono
-  public async editarMiPerfilContacto({ request, response }: HttpContext) {
-    try {
-      const id = Number(request.param('id'))
-      const cambios = request.only(['correo', 'direccion', 'telefono']) as any
-      const auth = (request as any).authUsuario
+ // PUT /movil/mi-perfil/:id  -> estudiante: SOLO correo, direccion, telefono (+ foto_url)
+public async editarMiPerfilContacto({ request, response }: HttpContext) {
+  try {
+    const id = Number(request.param('id'))
+    
+    const cambios = request.only(['correo', 'direccion', 'telefono', 'foto_url']) as any
+    const auth = (request as any).authUsuario
 
-      const data = await estudiantesService.editarComoEstudiante(id, cambios, {
-        id_usuario: Number(auth?.id_usuario),
-      })
+    const data = await estudiantesService.editarComoEstudiante(id, cambios, {
+      id_usuario: Number(auth?.id_usuario),
+    })
 
-      return response.ok(data)
-    } catch (e: any) {
-      return response.badRequest({ error: e?.message || 'No se pudo actualizar' })
-    }
+    return response.ok(data)
+  } catch (e: any) {
+    return response.badRequest({ error: e?.message || 'No se pudo actualizar' })
   }
+}
+
 
    public async cambiarPasswordEstudiante({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario;

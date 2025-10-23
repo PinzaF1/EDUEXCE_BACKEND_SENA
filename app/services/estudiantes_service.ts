@@ -551,37 +551,43 @@ private async perfilDesdeId(id_usuario: number) {
 }
 
   // PUT /estudiante/perfil  (solo contacto)
-  async actualizarContacto(id_usuario: number, body: any) {
-    const u = await Usuario.findBy('id_usuario', id_usuario)
-    if (!u) throw new Error('Perfil no encontrado')
+  // PUT /estudiante/perfil  (solo contacto)
+async actualizarContacto(id_usuario: number, body: any) {
+  const u = await Usuario.findBy('id_usuario', id_usuario)
+  if (!u) throw new Error('Perfil no encontrado')
 
-    // Validaciones sencillas
-    if (body.correo !== undefined) {
-      const mail = normEmail(body.correo)
-      if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
-        throw new Error('Correo inválido')
-      }
-      ;(u as any).correo = mail
+  // Validaciones sencillas
+  if (body.correo !== undefined) {
+    const mail = normEmail(body.correo)
+    if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+      throw new Error('Correo inválido')
     }
-
-    if (body.telefono !== undefined) {
-      const tel = String(body.telefono ?? '').replace(/\D+/g, '')
-      if (tel && (tel.length < 7 || tel.length > 15)) {
-        throw new Error('Teléfono inválido')
-      }
-      ;(u as any).telefono = tel || null
-    }
-
-    if (body.direccion !== undefined) {
-      const dir = clean(body.direccion)
-      ;(u as any).direccion = dir || null
-    }
-
-    await u.save()
-
-    
-    return await this.perfilDesdeId((u as any).id_usuario)
+    ;(u as any).correo = mail
   }
+
+  if (body.telefono !== undefined) {
+    const tel = String(body.telefono ?? '').replace(/\D+/g, '')
+    if (tel && (tel.length < 7 || tel.length > 15)) {
+      throw new Error('Teléfono inválido')
+    }
+    ;(u as any).telefono = tel || null
+  }
+
+  if (body.direccion !== undefined) {
+    const dir = clean(body.direccion)
+    ;(u as any).direccion = dir || null
+  }
+
+  // 🔹 NUEVO: permitir actualizar/eliminar la foto
+  if (body.foto_url !== undefined) {
+    const val = body.foto_url == null ? null : String(body.foto_url).trim()
+    ;(u as any).foto_url = val || null
+  }
+
+  await u.save()
+  return await this.perfilDesdeId((u as any).id_usuario)
+}
+
 
 
   // ===== Eliminar si no tiene historial, si no → inactivar =====
@@ -600,77 +606,103 @@ private async perfilDesdeId(id_usuario: number) {
   }
 
      /** ADMIN: puede editar todos estos campos (ajusta is_activo/is_active según tu DB) */
-  public async editarComoAdmin(
-    id: number,
-    payload: {
-      tipo_documento?: string
-      numero_documento?: string
-      correo?: string
-      direccion?: string
-      telefono?: string
-      grado?: string | number | null
-      curso?: string | null
-      jornada?: string | null
-      nombre?: string
-      apellido?: string
-      is_activo?: boolean
-    },
-    ctx?: { id_institucion?: number } // opcional: validar pertenencia
-  ) {
-    if (!Number.isFinite(id)) throw new Error('ID inválido')
+  // app/services/estudiantes_service.ts
+public async editarComoAdmin(
+  id: number,
+  payload: {
+    tipo_documento?: string
+    numero_documento?: string
+    correo?: string
+    direccion?: string
+    telefono?: string
+    grado?: string | number | null
+    curso?: string | null
+    jornada?: string | null
+    nombre?: string
+    apellido?: string
+    is_activo?: boolean | string | number
+    is_active?: boolean | string | number
+  },
+  ctx?: { id_institucion?: number }
+) {
+  if (!Number.isFinite(id)) throw new Error('ID inválido')
 
-    // normalizar
-    const cambios: any = { ...payload }
-    if (typeof cambios.correo === 'string') cambios.correo = normEmail(cambios.correo)
-    if (typeof cambios.numero_documento === 'string') cambios.numero_documento = clean(cambios.numero_documento)
-    if (typeof cambios.tipo_documento === 'string') cambios.tipo_documento = up(cambios.tipo_documento)
-    if (typeof cambios.nombre === 'string') cambios.nombre = clean(cambios.nombre)
-    if (typeof cambios.apellido === 'string') cambios.apellido = clean(cambios.apellido)
-    if (typeof cambios.direccion === 'string') cambios.direccion = clean(cambios.direccion)
-    if (typeof cambios.telefono === 'string') cambios.telefono = clean(cambios.telefono)
-    if (typeof cambios.grado !== 'undefined') cambios.grado = normGrado(cambios.grado)
-    if (typeof cambios.curso !== 'undefined') cambios.curso = normCurso(cambios.curso)
-    if (typeof cambios.jornada !== 'undefined') cambios.jornada = normJornada(cambios.jornada)
+  const cambios: any = { ...payload }
+  if (typeof cambios.correo === 'string')            cambios.correo            = normEmail(cambios.correo)
+  if (typeof cambios.numero_documento === 'string')  cambios.numero_documento  = clean(cambios.numero_documento)
+  if (typeof cambios.tipo_documento === 'string')    cambios.tipo_documento    = up(cambios.tipo_documento)
+  if (typeof cambios.nombre === 'string')            cambios.nombre            = clean(cambios.nombre)
+  if (typeof cambios.apellido === 'string')          cambios.apellido          = clean(cambios.apellido)
+  if (typeof cambios.direccion === 'string')         cambios.direccion         = clean(cambios.direccion)
+  if (typeof cambios.telefono === 'string')          cambios.telefono          = clean(cambios.telefono)
+  if (typeof cambios.grado !== 'undefined')          cambios.grado             = normGrado(cambios.grado)
+  if (typeof cambios.curso !== 'undefined')          cambios.curso             = normCurso(cambios.curso)
+  if (typeof cambios.jornada !== 'undefined')        cambios.jornada           = normJornada(cambios.jornada)
 
-    const est = await Usuario.find(id)
-    if (!est) throw new Error('Estudiante no encontrado')
-
-    // validar pertenencia (opcional)
-    if (ctx?.id_institucion != null) {
-      const mismoColegio = Number((est as any).id_institucion) === Number(ctx.id_institucion)
-      if (!mismoColegio) throw new Error('No autorizado para editar estudiantes de otra institución')
-    }
-
-    est.merge(cambios as any)
-    await est.save()
-    return est
+  // ✅ parseo robusto del boolean (evita !!"false")
+  const toBool = (v: any): boolean | undefined => {
+    if (v === true || v === false) return v
+    if (v == null) return undefined
+    const s = String(v).trim().toLowerCase()
+    if (s === 'true' || s === '1')  return true
+    if (s === 'false' || s === '0') return false
+    return undefined
   }
+  let nextActive = toBool(cambios.is_active)
+  if (typeof nextActive === 'undefined') nextActive = toBool(cambios.is_activo)
+  delete cambios.is_active
+  delete cambios.is_activo
+
+  const est = await Usuario.find(id)
+  if (!est) throw new Error('Estudiante no encontrado')
+
+  if (ctx?.id_institucion != null) {
+    const mismoColegio = Number((est as any).id_institucion) === Number(ctx.id_institucion)
+    if (!mismoColegio) throw new Error('No autorizado para editar estudiantes de otra institución')
+  }
+
+  // aplicar estado explícitamente
+  if (typeof nextActive !== 'undefined') (est as any).is_active = nextActive
+
+  est.merge(cambios)
+  await est.save()
+  await est.refresh() // 👈 garantiza leer el valor final desde DB
+  return est
+}
+
 
   /** ESTUDIANTE: solo puede editar correo, direccion y telefono */
   public async editarComoEstudiante(
-    id: number,
-    payload: { correo?: string; direccion?: string; telefono?: string },
-    ctx: { id_usuario: number } // para validar que sea su propio registro
-  ) {
-    if (!Number.isFinite(id)) throw new Error('ID inválido')
+  id: number,
+  payload: { correo?: string; direccion?: string; telefono?: string; foto_url?: string | null },
+  ctx: { id_usuario: number } // para validar que sea su propio registro
+) {
+  if (!Number.isFinite(id)) throw new Error('ID inválido')
 
-    // normalizar
-    const cambios: any = {}
-    if (payload?.correo !== undefined) cambios.correo = normEmail(payload.correo)
-    if (payload?.direccion !== undefined) cambios.direccion = clean(payload.direccion)
-    if (payload?.telefono !== undefined) cambios.telefono = clean(payload.telefono)
+  // normalizar
+  const cambios: any = {}
+  if (payload?.correo !== undefined)   cambios.correo   = normEmail(payload.correo)
+  if (payload?.direccion !== undefined) cambios.direccion = clean(payload.direccion)
+  if (payload?.telefono !== undefined)  cambios.telefono  = clean(payload.telefono)
 
-    const est = await Usuario.find(id)
-    if (!est) throw new Error('Estudiante no encontrado')
-
-    // asegurar que edita su propio registro
-    const esPropio = Number((est as any).id_usuario) === Number(ctx.id_usuario)
-    if (!esPropio) throw new Error('No autorizado para editar este estudiante')
-
-    est.merge(cambios)
-    await est.save()
-    return est
+  // 🔹 NUEVO: foto (permite setear URL o limpiar a null)
+  if (payload?.foto_url !== undefined) {
+    const val = payload.foto_url == null ? null : String(payload.foto_url).trim()
+    cambios.foto_url = val || null
   }
+
+  const est = await Usuario.find(id)
+  if (!est) throw new Error('Estudiante no encontrado')
+
+  // asegurar que edita su propio registro
+  const esPropio = Number((est as any).id_usuario) === Number(ctx.id_usuario)
+  if (!esPropio) throw new Error('No autorizado para editar este estudiante')
+
+  est.merge(cambios)
+  await est.save()
+  return est
+}
+
 
    public async cambiarPasswordEstudiante(id_usuario: number, actual: string, nueva: string) {
   if (!Number.isFinite(id_usuario)) throw new Error('Usuario inválido');

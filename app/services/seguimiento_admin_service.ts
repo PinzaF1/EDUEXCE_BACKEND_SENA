@@ -1,8 +1,34 @@
+// services/SeguimientoAdminService.ts (o .js si así lo usas)
 import Usuario from '../models/usuario.js'
 import Sesion from '../models/sesione.js'
 
+/** Áreas canónicas internas (siempre estas 5) */
 type Area = 'Matematicas'|'Lenguaje'|'Ciencias'|'Sociales'|'Ingles'
 const AREAS: Area[] = ['Matematicas','Lenguaje','Ciencias','Sociales','Ingles']
+
+/** Normalizadores reutilizables */
+function norm(s: string) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+/** Mapea cualquier variante del backend a un Area canónica.
+ *  Soporta el typo "socilaes" y variantes largas como "sociales y ciudadanas".
+ */
+function mapArea(raw: string): Area | null {
+  const n = norm(raw)
+  if (!n) return null
+  if (n.startsWith('matematic')) return 'Matematicas'
+  if (n.startsWith('ingl'))      return 'Ingles'
+  if (n.startsWith('cien'))      return 'Ciencias'
+  // atrapa: sociales, socilaes, sociales y ciudadanas, etc.
+  if (n.startsWith('soci') || n.includes('socilae')) return 'Sociales'
+  if (n.includes('lect') || n.startsWith('lengua'))  return 'Lenguaje'
+  return null
+}
 
 function rangoMes(fecha: Date) {
   const inicio = new Date(fecha.getFullYear(), fecha.getMonth(), 1)
@@ -120,22 +146,9 @@ export default class SeguimientoAdminService {
     minParticipantes = 5
   ) {
     const { inicio, fin } = rangoMes(new Date())
-
-    const normalize = (s: string) =>
-      String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
-
-    const mapArea = (raw: string): Area | null => {
-      const n = normalize(raw)
-      if (n.startsWith('matematic')) return 'Matematicas'
-      if (n.startsWith('ingl'))      return 'Ingles'
-      if (n.includes('ciencias'))    return 'Ciencias'
-      if (n.startsWith('social'))    return 'Sociales'
-      if (n.includes('lect') || n.startsWith('lengua')) return 'Lenguaje'
-      return null
-    }
-
     const estudiantes = await Usuario.query().where('rol','estudiante').where('id_institucion', id_institucion)
     const ids = estudiantes.map(e => e.id_usuario)
+
     if (!ids.length) {
       return { areas: AREAS.map(area => ({ area, estado: 'Atención', porcentaje_bajo: 0, debajo_promedio: 0 })) }
     }
@@ -147,11 +160,12 @@ export default class SeguimientoAdminService {
          .orWhere(q2 => q2.whereNull('fin_at').andWhere('inicio_at','>=',inicio as any).andWhere('inicio_at','<',fin as any))
       })
 
+    // Normalizamos Área AQUÍ (socilaes -> Sociales)
     const rows = (ses as any[]).filter(s => s?.puntaje_porcentaje != null && mapArea((s as any).area))
 
     const bestByStudentArea = new Map<string, { area: Area; uid: number; puntaje: number }>()
     for (const s of rows) {
-      const areaMapped = mapArea((s as any).area)!
+      const areaMapped = mapArea((s as any).area)! // <- normalizado
       const uid = Number((s as any).id_usuario)
       const puntaje = Number((s as any).puntaje_porcentaje || 0)
       const key = `${areaMapped}#${uid}`
@@ -212,7 +226,10 @@ export default class SeguimientoAdminService {
 
       let peor: { area: Area; avg: number } | null = null
       for (const area of AREAS) {
-        const porArea = ses.filter(s => (s as any).area === area && (s as any).puntaje_porcentaje != null)
+       
+        const porArea = (ses as any[])
+          .filter(s => mapArea((s as any).area) === area && (s as any).puntaje_porcentaje != null)
+
         if (!porArea.length) continue
         const avg = Math.round(porArea.reduce((a,b)=> a + ((b as any).puntaje_porcentaje||0),0)/porArea.length)
         if (!peor || avg < peor.avg) peor = { area, avg }
@@ -230,4 +247,135 @@ export default class SeguimientoAdminService {
 
     return items.sort((a,b)=> a.puntaje - b.puntaje).slice(0, limite)
   }
+
+// ✅ Reemplaza el mensual por este EN VIVO
+async areasActivosEnVivo(id_institucion: number, ventanaMin = 10) {
+  const ahora = new Date()
+  const desde = new Date(ahora.getTime() - ventanaMin * 60 * 1000)
+
+  const estudiantes = await Usuario.query()
+    .where('rol','estudiante')
+    .where('id_institucion', id_institucion)
+    .select('id_usuario')
+
+  const ids = estudiantes.map(e => e.id_usuario)
+  if (!ids.length) return { islas: AREAS.map(a => ({ area: a, activos: 0 })) }
+
+  // sesiones abiertas y con actividad reciente
+  const sesAbiertas = await Sesion.query()
+    .whereIn('id_usuario', ids)
+    .whereNull('fin_at')
+    .where(q => {
+      q.where('updated_at', '>=', desde as any)  // si tienes heartbeat
+       .orWhere('inicio_at', '>=', desde as any) // fallback
+    })
+    .select(['id_usuario','area','inicio_at','updated_at','id_sesion'] as any)
+
+  // última sesión por usuario (si hay más de una abierta)
+  const ultimaPorUsuario = new Map<number, any>()
+  for (const s of sesAbiertas as any[]) {
+    const uid = Number(s.id_usuario)
+    const ts = s.updated_at ? new Date(s.updated_at).getTime()
+                            : (s.inicio_at ? new Date(s.inicio_at).getTime() : 0)
+    const cur = ultimaPorUsuario.get(uid)
+    if (!cur || ts > cur._ts) ultimaPorUsuario.set(uid, { ...s, _ts: ts })
+  }
+
+  // contar por área normalizada
+  const porArea = new Map<Area, number>()
+  for (const s of ultimaPorUsuario.values()) {
+    const a = mapArea(s.area)
+    if (!a) continue
+    porArea.set(a, (porArea.get(a) || 0) + 1)
+  }
+
+  const islas = AREAS.map(a => ({ area: a, activos: porArea.get(a) || 0 }))
+  return { islas }
+}
+
+
+// 2) Rendimiento por área (mes actual)
+async rendimientoPorArea(id_institucion: number) {
+  const { inicio, fin } = rangoMes(new Date())
+
+  const estudiantes = await Usuario.query()
+    .where('rol','estudiante')
+    .where('id_institucion', id_institucion)
+    .select('id_usuario')
+
+  const ids = estudiantes.map(e => e.id_usuario)
+  if (!ids.length) return { items: AREAS.map(a => ({ area: a, promedio: 0 })) }
+
+  const ses = await Sesion.query()
+    .whereIn('id_usuario', ids)
+    .where((q) => {
+      q.where('fin_at','>=',inicio as any).andWhere('fin_at','<',fin as any)
+       .orWhere(q2 => q2.whereNull('fin_at').andWhere('inicio_at','>=',inicio as any).andWhere('inicio_at','<',fin as any))
+    })
+    .select(['area','puntaje_porcentaje'])
+
+  const sum = new Map<Area, { s: number; n: number }>()
+  for (const s of ses as any[]) {
+    const a = mapArea(s.area)
+    const p = Number(s.puntaje_porcentaje ?? 0)
+    if (!a || isNaN(p)) continue
+    if (!sum.has(a)) sum.set(a, { s: 0, n: 0 })
+    const cur = sum.get(a)!; cur.s += p; cur.n += 1
+  }
+
+  const items = AREAS.map(a => {
+    const cur = sum.get(a)
+    const promedio = cur && cur.n ? Math.round(cur.s / cur.n) : 0
+    return { area: a, promedio }
+  })
+
+  return { items }
+}
+
+// 3) Serie: Progreso por área (últimos N meses)
+async seriesProgresoPorArea(id_institucion: number, meses = 6) {
+  const hoy = new Date()
+
+  const estudiantes = await Usuario.query()
+    .where('rol','estudiante')
+    .where('id_institucion', id_institucion)
+    .select('id_usuario')
+
+  const ids = estudiantes.map(e => e.id_usuario)
+  if (!ids.length) return { series: [] }
+
+  const out: Array<{ mes: string; area: Area; promedio: number }> = []
+
+  for (let i = meses - 1; i >= 0; i--) {
+    const ref = new Date(hoy.getFullYear(), hoy.getMonth() - i, 1)
+    const { inicio, fin } = rangoMes(ref)
+
+    const ses = await Sesion.query()
+      .whereIn('id_usuario', ids)
+      .where((q) => {
+        q.where('fin_at','>=',inicio as any).andWhere('fin_at','<',fin as any)
+         .orWhere(q2 => q2.whereNull('fin_at').andWhere('inicio_at','>=',inicio as any).andWhere('inicio_at','<',fin as any))
+      })
+      .select(['area','puntaje_porcentaje'])
+
+    const sum = new Map<Area, { s: number; n: number }>()
+    for (const s of ses as any[]) {
+      const a = mapArea(s.area)
+      const p = Number(s.puntaje_porcentaje ?? 0)
+      if (!a || isNaN(p)) continue
+      if (!sum.has(a)) sum.set(a, { s: 0, n: 0 })
+      const cur = sum.get(a)!; cur.s += p; cur.n += 1
+    }
+
+    const labelMes = `${inicio.getFullYear()}-${String(inicio.getMonth()+1).padStart(2,'0')}`
+    for (const a of AREAS) {
+      const cur = sum.get(a)
+      const promedio = cur && cur.n ? Math.round(cur.s / cur.n) : 0
+      out.push({ mes: labelMes, area: a, promedio })
+    }
+  }
+
+  return { series: out }
+}
+
 }
