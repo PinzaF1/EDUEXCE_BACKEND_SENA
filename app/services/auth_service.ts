@@ -14,7 +14,7 @@ export default class AuthService {
     if (!inst) return null
 
     // si manejas flag de activación en instituciones
-    if ((inst as any).is_activo === false) return null
+    if ((inst as any).is_active === false) return null
 
     const ok = await bcrypt.compare(password, (inst as any).password)
     if (!ok) return null

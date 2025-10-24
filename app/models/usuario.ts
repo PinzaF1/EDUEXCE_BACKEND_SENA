@@ -31,7 +31,10 @@ export default class Usuario extends BaseModel {
   @column() declare direccion?: string
   @column() declare foto_url?: string
 
-  @column() declare is_active: boolean
+  @column({ columnName: 'is_active' })
+  declare isActive: boolean    
+
+
   @column.dateTime() declare last_login_at?: DateTime
   @column.dateTime() declare last_activity_at?: DateTime
 
@@ -55,4 +58,5 @@ export default class Usuario extends BaseModel {
 
   @hasMany(() => Reto, { foreignKey: 'creado_por' })
   declare retosCreados: HasMany<typeof Reto>
+  is_active: boolean
 }

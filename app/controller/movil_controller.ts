@@ -301,7 +301,7 @@ public async cerrarSimulacro({ request, response }: HttpContext) {
 
  // ======== CONTROLLER (métodos Isla del Conocimiento) ========
 
- public async islaSimulacroIniciar({ request, response }: HttpContext) {
+ async islaSimulacroIniciar({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
   const { modalidad } = (request.only(['modalidad']) as any) || {}
   const modIn = String(modalidad ?? '').trim().toLowerCase()
@@ -334,48 +334,56 @@ public async cerrarSimulacro({ request, response }: HttpContext) {
   })
 }
 
-public async islaSimulacroCerrar({ request, response }: HttpContext) {
+/** POST /movil/isla/simulacro/cerrar */
+  async islaSimulacroCerrar({ request, response }: HttpContext) {
   const body = request.only(['id_sesion', 'respuestas']) as any
   const id_sesion = Number(body.id_sesion)
   const inResps = Array.isArray(body.respuestas) ? body.respuestas : []
+
   if (!id_sesion || !Array.isArray(inResps)) {
     return response.badRequest({ error: 'id_sesion y respuestas son obligatorios' })
   }
 
+  // acepta {orden, opcion} o {id_pregunta, respuesta}
   const respuestas = inResps.map((r: any) => {
-  if (r?.orden != null) {
+    if (r?.orden != null) {
+      return {
+        orden: Number(r.orden),
+        opcion: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
+        tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
+      }
+    }
     return {
-      orden: Number(r.orden),
-      opcion: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '')
-        .toUpperCase(),
+      id_pregunta: Number(r.id_pregunta ?? r.id ?? r.idPregunta ?? NaN),
+      respuesta: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '').toUpperCase(),
       tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
     }
-  }
-  // Acepta también { id_pregunta, respuesta }
-  return {
-    id_pregunta: Number(r.id_pregunta ?? r.id ?? r.idPregunta ?? NaN),
-    respuesta: String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '')
-      .toUpperCase(),
-    tiempo_empleado_seg: r.tiempo_empleado_seg ?? null,
-  }
-})
+  })
+
   const data = await (sesionesService as any).cerrarSimulacroMixto({ id_sesion, respuestas })
   return response.ok(data)
 }
 
-public async islaSimulacroResumen({ request, response }: HttpContext) {
-  const raw = request.param('id_sesion')
-  const id_sesion = Number.parseInt(String(raw), 10)
+/** GET /movil/isla/simulacro/:id_sesion/resumen */
+async islaSimulacroResumen({ request, response }: HttpContext) {
+  const raw = request.param('id_sesion');
+  const id_sesion = Number.parseInt(String(raw), 10);
 
+  // Verificación de la validez de id_sesion
   if (!Number.isFinite(id_sesion) || id_sesion <= 0) {
-    return response.badRequest({ error: 'id_sesion es obligatorio y debe ser numérico' })
+    return response.badRequest({ error: 'id_sesion es obligatorio y debe ser numérico' });
   }
 
-  // Reutilizamos el detalle que ya arma header/resumen/análisis
-  const data = await sesionesService.detalleSesion(id_sesion)
-  if (!data) return response.notFound({ error: 'Simulacro no encontrado' })
-  return response.ok(data)
+  // Llamada a detalleSesion para obtener los datos
+  const data = await sesionesService.detalleSesion(id_sesion);
+
+  // Si no se encuentra la sesión
+  if (!data) return response.notFound({ error: 'Simulacro no encontrado' });
+
+  // Devuelve los datos del simulacro
+  return response.ok(data);
 }
+
 
 
   // PROGRESO

@@ -591,19 +591,31 @@ async actualizarContacto(id_usuario: number, body: any) {
 
 
   // ===== Eliminar si no tiene historial, si no → inactivar =====
-  async eliminarOInactivar(id_usuario: number) {
-    const sesiones = await Sesion.query().where('id_usuario', id_usuario).limit(1)
-    if (sesiones.length > 0) {
-      const u = await Usuario.findOrFail(id_usuario)
-      ;(u as any).is_active = false
-      await u.save()
-      return { estado: 'inactivado' as const }
-    } else {
-      const u = await Usuario.findOrFail(id_usuario)
-      await u.delete()
-      return { estado: 'eliminado' as const }
-    }
+
+ async activarEstudiante(id_usuario: number) {
+    const usuario = await Usuario.findOrFail(id_usuario);
+    usuario.is_active = true; // Cambiar is_active a true
+    await usuario.save();
+    return { estado: 'activado' as const }; // Devuelve un mensaje indicando que se activó
   }
+
+  // Función para inactivar o eliminar un estudiante
+  public async eliminarOInactivar(id_usuario: number) {
+  const sesiones = await Sesion.query().where('id_usuario', id_usuario).limit(1);
+ 
+  if (sesiones.length > 0) {
+      const usuario = await Usuario.findOrFail(id_usuario);
+      usuario.is_active = false;  // Desactivar el usuario
+      await usuario.save();  // Guardar cambios
+      return { estado: 'inactivado' as const };
+  } else {
+      const usuario = await Usuario.findOrFail(id_usuario);
+      await usuario.delete();  // Eliminar el usuario si no tiene historial
+      return { estado: 'eliminado' as const };
+  }
+}
+
+
 
      /** ADMIN: puede editar todos estos campos (ajusta is_activo/is_active según tu DB) */
   // app/services/estudiantes_service.ts
@@ -620,7 +632,7 @@ public async editarComoAdmin(
     jornada?: string | null
     nombre?: string
     apellido?: string
-    is_activo?: boolean | string | number
+    is_activo?: boolean | string | number   // aceptamos alias entrante
     is_active?: boolean | string | number
   },
   ctx?: { id_institucion?: number }
@@ -639,13 +651,13 @@ public async editarComoAdmin(
   if (typeof cambios.curso !== 'undefined')          cambios.curso             = normCurso(cambios.curso)
   if (typeof cambios.jornada !== 'undefined')        cambios.jornada           = normJornada(cambios.jornada)
 
-  // ✅ parseo robusto del boolean (evita !!"false")
+  // parseo robusto del boolean
   const toBool = (v: any): boolean | undefined => {
     if (v === true || v === false) return v
     if (v == null) return undefined
     const s = String(v).trim().toLowerCase()
-    if (s === 'true' || s === '1')  return true
-    if (s === 'false' || s === '0') return false
+    if (['true','1','sí','si'].includes(s)) return true
+    if (['false','0','no'].includes(s))     return false
     return undefined
   }
   let nextActive = toBool(cambios.is_active)
@@ -661,12 +673,14 @@ public async editarComoAdmin(
     if (!mismoColegio) throw new Error('No autorizado para editar estudiantes de otra institución')
   }
 
-  // aplicar estado explícitamente
-  if (typeof nextActive !== 'undefined') (est as any).is_active = nextActive
+  // aplica estado (DB tiene is_active)
+  if (typeof nextActive !== 'undefined') {
+    (est as any).is_active = nextActive
+  }
 
   est.merge(cambios)
   await est.save()
-  await est.refresh() // 👈 garantiza leer el valor final desde DB
+  await est.refresh()
   return est
 }
 

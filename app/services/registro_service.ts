@@ -101,7 +101,7 @@ export default class RegistroService {
         jornada: (inst as any).jornada,
         correo: (inst as any).correo,
         logo_url: (inst as any).logo_url ?? null,
-        is_activo: (inst as any).is_activo ?? true,
+        is_active: (inst as any).is_active ?? true,
         created_at: (inst as any).created_at,
         updated_at: (inst as any).updated_at,
       },

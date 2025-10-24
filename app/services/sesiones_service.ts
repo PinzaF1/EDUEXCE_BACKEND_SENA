@@ -75,6 +75,13 @@ function extractCorrectLetter(b: any, totalOpc: number): string {
 }
 
 /** Devuelve ["A. ...", "B. ...", ...] desde cualquiera de los formatos comunes */
+// 🔧 FIX 1: pelar prefijos ya rotulados ("A. ", "1) ", etc.) para evitar "A. A. ..."
+function stripLabel(s: any) {
+  return String(s ?? '')
+    .replace(/^\s*([A-F]|[1-6])[\.\)]\s*/i, '')
+    .trim()
+}
+
 function fmtOpciones(opciones: any): string[] {
   // parsear si viene como texto
   try {
@@ -93,12 +100,13 @@ function fmtOpciones(opciones: any): string[] {
       return opciones.map((it: any, i: number) => {
         const key =
           toLetter(it?.key ?? it?.letra ?? it?.indice ?? i, opciones.length) || ABC[i] || 'A'
-        const text = String(it?.text ?? it?.texto ?? it?.label ?? it?.value ?? '').trim()
+        const textRaw = String(it?.text ?? it?.texto ?? it?.label ?? it?.value ?? '').trim()
+        const text = stripLabel(textRaw)
         return `${key}. ${text}`
       })
     }
     // array de strings
-    return opciones.map((txt: any, i: number) => `${ABC[i] || 'A'}. ${String(txt ?? '').trim()}`)
+    return opciones.map((txt: any, i: number) => `${ABC[i] || 'A'}. ${stripLabel(txt)}`)
   }
 
   // objeto { a: "...", b: "...", ... }
@@ -109,7 +117,7 @@ function fmtOpciones(opciones: any): string[] {
       const kUpper = ABC[i]
       const val = opciones[kLower] ?? opciones[kUpper]
       if (val == null) break
-      out.push(`${ABC[i]}. ${String(val).trim()}`)
+      out.push(`${ABC[i]}. ${stripLabel(String(val))}`)
     }
     if (out.length) return out
   }
@@ -158,6 +166,11 @@ async function upsertProgresoNivel(opts: {
 
 /* ====================== Service ====================== */
 export default class SesionesService {
+
+  private normalizeText(text: string): string {
+    return text.trim().toLowerCase();
+  }
+  
   ia = new IaService()
 
   private ensureDetalleTable() {
@@ -363,122 +376,130 @@ export default class SesionesService {
   }
 
   /* ========= PARADA ========= */
-  async crearParada(d: {
-    id_usuario: number
-    area: Area
-    subtema: string
-    nivel_orden: number
-    usa_estilo_kolb: boolean
-    intento_actual?: number
-    estilo_kolb?: 'Divergente' | 'Asimilador' | 'Convergente' | 'Acomodador'
-  }) {
-    this.ensureDetalleTable()
 
-    const area = String(d.area ?? '').trim()
-    const subtema = String(d.subtema ?? '').trim()
-    if (!area || !subtema) throw new Error('area y subtema son obligatorios')
+    async crearParada(d: {
+  id_usuario: number;
+  area: Area;
+  subtema: string;
+  nivel_orden: number;
+  usa_estilo_kolb: boolean;
+  intento_actual?: number;
+  estilo_kolb?: 'Divergente' | 'Asimilador' | 'Convergente' | 'Acomodador';
+}) {
+  this.ensureDetalleTable();
 
-    await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+  // Normalización de los valores
+  const area = this.normalizeText(String(d.area ?? '').trim());
+  const subtema = this.normalizeText(String(d.subtema ?? '').trim());
 
-    // evitar repetir preguntas de sesiones previas del mismo subtema
-    const prev = await Sesion.query()
-      .where('id_usuario', d.id_usuario)
-      .where('area', area)
-      .where('subtema', subtema)
-      .orderBy('inicio_at', 'asc')
-      .first()
-    const excludeIds: number[] = []
-    if (prev) {
-      const detPrev = await SesionDetalle.query().where('id_sesion', (prev as any).id_sesion)
-      excludeIds.push(...detPrev.map((x) => Number((x as any).id_pregunta)).filter(Boolean))
-    }
+  // Validar que se haya proporcionado un área y un subtema
+  if (!area || !subtema) throw new Error('area y subtema son obligatorios');
 
-    // Estilo Kolb a aplicar
-    let estilo_kolb: 'Divergente' | 'Asimilador' | 'Convergente' | 'Acomodador' | undefined
-    if (d.estilo_kolb) estilo_kolb = d.estilo_kolb
-    else if (d.usa_estilo_kolb) {
-      try {
-        const k = await EstilosAprendizaje.findBy('id_usuario', d.id_usuario)
-        const raw = String((k as any)?.estilo || '').toLowerCase()
-        if (raw.startsWith('diver')) estilo_kolb = 'Divergente'
-        else if (raw.startsWith('asim')) estilo_kolb = 'Asimilador'
-        else if (raw.startsWith('conv')) estilo_kolb = 'Convergente'
-        else if (raw.startsWith('acom')) estilo_kolb = 'Acomodador'
-      } catch {}
-    }
+  // Actualizar el estado de las sesiones previas
+  await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() });
 
-    // Normaliza el área para IaService (Ciencias -> Ciencias Naturales; sociales OK)
-    const areaUI: AreaUI =
-      area.toLowerCase().startsWith('cien')
-        ? ('Ciencias Naturales' as AreaUI)
-        : area.toLowerCase().startsWith('soci')
-        ? ('sociales' as AreaUI)
-        : (area as AreaUI)
+  // Evitar repetir preguntas de sesiones previas del mismo subtema
+  const prev = await Sesion.query()
+    .where('id_usuario', d.id_usuario)
+    .where('area', area)
+    .where('subtema', subtema)
+    .orderBy('inicio_at', 'asc')
+    .first();
 
-    // 1) intento rápido: subtema
-    let locales = await this.ia.generarPreguntas({
+  const excludeIds: number[] = [];
+  if (prev) {
+    const detPrev = await SesionDetalle.query().where('id_sesion', (prev as any).id_sesion);
+    excludeIds.push(...detPrev.map((x) => Number((x as any).id_pregunta)).filter(Boolean));
+  }
+
+  // Determinar el estilo Kolb a aplicar
+  let estilo_kolb: 'Divergente' | 'Asimilador' | 'Convergente' | 'Acomodador' | undefined;
+  if (d.estilo_kolb) estilo_kolb = d.estilo_kolb;
+  else if (d.usa_estilo_kolb) {
+    try {
+      const k = await EstilosAprendizaje.findBy('id_usuario', d.id_usuario);
+      const raw = String((k as any)?.estilo || '').toLowerCase();
+      if (raw.startsWith('diver')) estilo_kolb = 'Divergente';
+      else if (raw.startsWith('asim')) estilo_kolb = 'Asimilador';
+      else if (raw.startsWith('conv')) estilo_kolb = 'Convergente';
+      else if (raw.startsWith('acom')) estilo_kolb = 'Acomodador';
+    } catch {}
+  }
+
+  // Normalizar área para IA (Ciencias -> Ciencias Naturales; Sociales OK)
+  const areaUI: AreaUI =
+    area.toLowerCase().startsWith('cien')
+      ? ('Ciencias Naturales' as AreaUI)
+      : area.toLowerCase().startsWith('soci')
+      ? ('sociales' as AreaUI)
+      : (area as AreaUI);
+
+  // 1) Intento rápido: obtener preguntas filtradas por subtema
+  let locales = await this.ia.generarPreguntas({
+    area: areaUI,
+    subtemas: [subtema],
+    estilo_kolb,
+    cantidad: 5,
+    excluir_ids: excludeIds,
+  } as any);
+
+  // 2) Plan B: Si no hay suficientes preguntas por subtema, intentar obtener preguntas aleatorias por área
+  if (!locales.length) {
+    locales = await this.ia.generarPreguntas({
+      area: areaUI,
+      cantidad: 5,
+      excluir_ids: excludeIds,
+    } as any);
+  }
+
+  // 3) Crear sesión y adjuntar las preguntas obtenidas
+  const sesion = await this.upStartOrReuse({
+    id_usuario: d.id_usuario,
+    area,
+    tipo: 'practica',
+    nivel_orden: d.nivel_orden ?? null,
+    subtema,
+    total_preguntas: locales.length,
+    modo: 'estandar',
+    usa_estilo_kolb: !!d.usa_estilo_kolb,
+  });
+
+  if (locales.length) {
+    await this.upAttachPreguntas(Number((sesion as any).id_sesion), locales);
+  }
+
+  // 4) Sembrado en segundo plano (no bloquea)
+  void (async () => {
+    await this.ia.generarYSembrarEnBancoBackground({
       area: areaUI,
       subtemas: [subtema],
       estilo_kolb,
       cantidad: 5,
       excluir_ids: excludeIds,
-    } as any)
+    } as any);
+  })();
 
-    // 2) plan B: si no hay nada por subtema, una random por área
-    if (!locales.length) {
-      locales = await this.ia.generarPreguntas({
-        area: areaUI,
-        cantidad: 5,
-        excluir_ids: excludeIds,
-      } as any)
-    }
+  // 5) Actualizar el progreso de nivel del usuario
+  await upsertProgresoNivel({
+    id_usuario: d.id_usuario,
+    area: d.area,
+    subtema: d.subtema,
+    nivel_orden: d.nivel_orden,
+    preguntas_por_intento: (sesion as any).total_preguntas ?? 1,
+  });
 
-    // 3) crear sesión y adjuntar
-    const sesion = await this.upStartOrReuse({
-      id_usuario: d.id_usuario,
-      area,
-      tipo: 'practica',
-      nivel_orden: d.nivel_orden ?? null,
+  // Devolver los resultados de la sesión
+  return {
+    sesion,
+    preguntas: (locales || []).map((p: any) => ({
+      id_pregunta: p.id_pregunta,
+      area: p.area ?? area,
       subtema,
-      total_preguntas: locales.length,
-      modo: 'estandar',
-      usa_estilo_kolb: !!d.usa_estilo_kolb,
-    })
-
-    if (locales.length) {
-      await this.upAttachPreguntas(Number((sesion as any).id_sesion), locales)
-    }
-
-    // 4) sembrado en background (no bloquea)
-    void (async () => {
-      await this.ia.generarYSembrarEnBancoBackground({
-        area: areaUI,
-        subtemas: [subtema],
-        estilo_kolb,
-        cantidad: 5,
-        excluir_ids: excludeIds,
-      } as any)
-    })()
-
-    await upsertProgresoNivel({
-      id_usuario: d.id_usuario,
-      area: d.area,
-      subtema: d.subtema,
-      nivel_orden: d.nivel_orden,
-      preguntas_por_intento: (sesion as any).total_preguntas ?? 1,
-    })
-
-    return {
-      sesion,
-      preguntas: (locales || []).map((p: any) => ({
-        id_pregunta: p.id_pregunta,
-        area: p.area ?? area,
-        subtema,
-        enunciado: p.pregunta,
-        opciones: fmtOpciones(p.opciones),
-      })),
-    }
-  }
+      enunciado: p.pregunta,
+      opciones: fmtOpciones(p.opciones),
+    })),
+  };
+}
 
   /* ========= CERRAR SESIÓN (SERVICE) ========= */
 async cerrarSesion(d: {
@@ -809,6 +830,24 @@ async cerrarSesion(d: {
     return Math.round((p / 100) * 500)
   }
 
+  // 🔧 FIX 2: helper para hacer match robusto por área (Ciencias/Ciencias Naturales; Sociales/ciencias sociales)
+  private matchArea(qb: any, area: string) {
+    const t = String(area || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+
+    if (t.startsWith('cien')) {
+      qb.whereRaw("unaccent(lower(area)) LIKE 'ciencias%'")
+      return
+    }
+    if (t.startsWith('soci')) {
+      qb.whereRaw("unaccent(lower(area)) LIKE 'social%'")
+      return
+    }
+    qb.whereRaw('unaccent(lower(area)) = unaccent(lower(?))', [area])
+  }
+
   async crearSimulacroMixto(d: { id_usuario: number; modalidad: 'facil' | 'dificil' }) {
     this.ensureDetalleTable()
 
@@ -840,23 +879,25 @@ async cerrarSesion(d: {
       }))
 
     for (const area of AREAS) {
-      const faltan = () => porArea - elegidas.filter((x) => (x as any).area === area).length
-      if (faltan() <= 0) continue
+    const faltan = () => porArea - elegidas.filter((x) => (x as any).area === area).length
+    if (faltan() <= 0) continue
 
-      let base: any[] = []
-      try {
-        base = await BancoPregunta.query()
-          .whereRaw('unaccent(lower(area)) = unaccent(lower(?))', [area])
-          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
-          .orderByRaw('random()')
-          .limit(faltan())
-      } catch {
-        base = await BancoPregunta.query()
-          .whereILike('area', `%${area}%`)
-          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
-          .orderByRaw('random()')
-          .limit(faltan())
-      }
+    let base: any[] = []
+    try {
+      base = await BancoPregunta.query()
+        
+        .where((qb) => this.matchArea(qb, area))
+        .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+        .orderByRaw('random()')
+        .limit(faltan())
+    } catch {
+      base = await BancoPregunta.query()
+       
+        .whereILike('area', `%${area}%`)
+        .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+        .orderByRaw('random()')
+        .limit(faltan())
+    }
 
       for (const r of base) {
         const id = Number((r as any).id_pregunta)
@@ -908,57 +949,83 @@ async cerrarSesion(d: {
   }
 
   async cerrarSimulacroMixto(d: {
-    id_sesion: number
-    respuestas: Array<
-      | { orden: number; opcion?: string; respuesta?: string; seleccion?: string; alternativa?: string; tiempo_empleado_seg?: number }
-      | { id_pregunta: number; opcion?: string; respuesta?: string; seleccion?: string; alternativa?: string; tiempo_empleado_seg?: number }
-    >
-  }) {
-    const res = await this.cerrarSesion(d as any)
+  id_sesion: number;
+  respuestas: Array<
+    | { orden: number; opcion?: string; respuesta?: string; seleccion?: string; alternativa?: string; tiempo_empleado_seg?: number }
+    | { id_pregunta: number; opcion?: string; respuesta?: string; seleccion?: string; alternativa?: string; tiempo_empleado_seg?: number }
+  >
+}) {
+  // Cerrar la sesión actual
+  const res = await this.cerrarSesion(d as any);
 
-    const ses = await Sesion.findOrFail(d.id_sesion)
-    const detalles = await SesionDetalle.query().where('id_sesion', d.id_sesion)
-    const ids = detalles.map((x: any) => Number(x.id_pregunta)).filter(Boolean)
-    const banco = ids.length ? await BancoPregunta.query().whereIn('id_pregunta', ids) : []
+  // Obtener la sesión y los detalles de las preguntas
+  const ses = await Sesion.findOrFail(d.id_sesion);
+  const detalles = await SesionDetalle.query().where('id_sesion', d.id_sesion);
+  const ids = detalles.map((x: any) => Number(x.id_pregunta)).filter(Boolean);
+  
+  // Obtener las preguntas de la base de datos
+  const banco = ids.length ? await BancoPregunta.query().whereIn('id_pregunta', ids) : [];
 
-    const areaDe = new Map<number, string>()
-    for (const b of banco as any[]) areaDe.set(Number(b.id_pregunta), String((b as any).area))
+  // Crear un mapa para asociar el ID de la pregunta con su área
+  const areaDe = new Map<number, string>();
+  for (const b of banco as any[]) areaDe.set(Number(b.id_pregunta), String((b as any).area));
 
-    const areasAgg: Record<string, { total: number; ok: number }> = {}
-    for (const det of detalles as any[]) {
-      const idp = Number(det.id_pregunta)
-      const a = areaDe.get(idp) || 'Desconocida'
-      if (!areasAgg[a]) areasAgg[a] = { total: 0, ok: 0 }
-      areasAgg[a].total += 1
-      if (det.es_correcta) areasAgg[a].ok += 1
-    }
+  // Inicializar el análisis de áreas
+  const areasAgg: Record<string, { total: number; ok: number }> = {};
 
-    const por_area: Record<string, { total: number; correctas: number; porcentaje: number; puntaje_icfes: number }> = {}
-    for (const [a, v] of Object.entries(areasAgg)) {
-      const pct = v.total > 0 ? Math.round((v.ok / v.total) * 100) : 0
-      por_area[a] = {
-        total: v.total,
-        correctas: v.ok,
-        porcentaje: pct,
-        puntaje_icfes: this.icfesScore(pct),
-      }
-    }
+  // Procesar las respuestas
+  for (const det of detalles as any[]) {
+    const idp = Number(det.id_pregunta);
+    const a = areaDe.get(idp) || 'Desconocida';
 
-    const total = Number((ses as any).total_preguntas) || 0
-    const globalPct = total > 0 ? Math.round((Number((ses as any).correctas) / total) * 100) : 0
+    // Inicializar el área si es la primera vez que aparece
+    // Inicializar el área si es la primera vez que aparece
+if (!areasAgg[a]) areasAgg[a] = { total: 0, ok: 0 };
 
-    return {
-      ...res,
-      nivelOrden: Number((ses as any).nivel_orden) || null,
-      resumenAreas: por_area,
-      global: {
-        total,
-        correctas: Number((ses as any).correctas) || 0,
-        porcentaje: globalPct,
-        puntaje_icfes: this.icfesScore(globalPct),
-      },
-    }
-  }
+// Aumentar el total de preguntas para el área
+areasAgg[a].total += 1;
+
+// Obtener la respuesta marcada por el usuario
+const respuesta = d.respuestas.find((r: any) => r.id_pregunta === idp)?.alternativa ?? '';
+
+// Obtener la respuesta correcta de la base de datos
+const respuestaCorrecta = (await BancoPregunta.query().where('id_pregunta', idp).first())?.respuesta_correcta?.toUpperCase() || '';
+
+// Verificar si la respuesta marcada es la correcta
+if (respuesta.trim().toUpperCase() === respuestaCorrecta) {
+  areasAgg[a].ok += 1; // Incrementar si la respuesta es correcta
+}
+
+// Crear el análisis por área
+const por_area: Record<string, { total: number; correctas: number; porcentaje: number; puntaje_icfes: number }> = {};
+for (const [a, v] of Object.entries(areasAgg)) {
+  const pct = v.total > 0 ? Math.round((v.ok / v.total) * 100) : 0;
+  por_area[a] = {
+    total: v.total,
+    correctas: v.ok,
+    porcentaje: pct,
+    puntaje_icfes: this.icfesScore(pct),
+  };
+}
+
+  // Calcular el puntaje global
+  const total = Number((ses as any).total_preguntas) || 0;
+  const correctas = detalles.filter((det: any) => det.es_correcta).length;
+  const globalPct = total > 0 ? Math.round((correctas / total) * 100) : 0;
+
+  // Devolver la información completa
+  return {
+    ...res,
+    nivelOrden: Number((ses as any).nivel_orden) || null,
+    resumenAreas: por_area,
+    global: {
+      total,
+      correctas,
+      porcentaje: globalPct,
+      puntaje_icfes: this.icfesScore(globalPct),
+    },
+  };
+  }}
 
   /* ========= DETALLE SESIÓN ========= */
   private nivelNombre(p: number) {
@@ -1032,24 +1099,35 @@ async cerrarSesion(d: {
       if ((b as any).explicacion) explicacionDe.set(idp, String((b as any).explicacion))
     }
 
-    const preguntas = detalles.map((det: any) => {
-      const idp = Number(det.id_pregunta)
-      const total = totalOpcDe.get(idp) ?? 4
-      const marcada = toLetter(det.alternativa_elegida, total)
-      const correcta = correctaDe.get(idp) || null
-      return {
-        orden: Number(det.orden),
-        id_pregunta: idp,
-        area: areaDe.get(idp) ?? null,
-        subtema: subtemaDe.get(idp) ?? null,
-        enunciado: enunDe.get(idp) ?? null,
-        correcta,
-        marcada,
-        es_correcta: !!det.es_correcta,
-        explicacion: explicacionDe.get(idp) ?? null,
-        tiempo_empleado_seg: det.tiempo_empleado_seg ?? null,
-      }
-    })
+   const preguntas = detalles.map((det: any) => {
+  console.log(`det: ${JSON.stringify(det)}`);  // Verifica si alternativa_elegida está presente
+  const idp = Number(det.id_pregunta);
+  const total = totalOpcDe.get(idp) ?? 4;
+
+  // Aquí se asegura que si no hay alternativa elegida, se asigna un valor vacío.
+  const alternativaElegida = det.alternativa_elegida ? det.alternativa_elegida : '';
+  
+  const marcada = toLetter(alternativaElegida, total); // Aquí debería tener la respuesta seleccionada
+  const correcta = correctaDe.get(idp) || null;
+
+  // Verifica si la respuesta es correcta, comparando ambas en mayúsculas
+  const es_correcta = marcada.trim().toUpperCase() === correcta?.trim().toUpperCase();
+
+  return {
+    orden: Number(det.orden),
+    id_pregunta: idp,
+    area: areaDe.get(idp) ?? null,
+    subtema: subtemaDe.get(idp) ?? null,
+    enunciado: enunDe.get(idp) ?? null,
+    correcta,
+    marcada,
+    es_correcta,
+    explicacion: explicacionDe.get(idp) ?? null,
+    tiempo_empleado_seg: det.tiempo_empleado_seg ?? null,
+  }
+});
+
+
 
     const correctas = preguntas.filter((p) => p.es_correcta).length
     const total = Number(row.total_preguntas || preguntas.length || 0)

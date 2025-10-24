@@ -79,7 +79,7 @@ public async editarEstudiante({ request, response }: HttpContext) {
   try {
     const id = Number(request.param('id'))
 
-    // 👇 aceptar ambos alias para el booleano
+    // aceptar ambos alias para el booleano
     const cambios = request.only([
       'tipo_documento',
       'numero_documento',
@@ -108,10 +108,28 @@ public async editarEstudiante({ request, response }: HttpContext) {
 
 
   public async eliminarEstudiante({ request, response }: HttpContext) {
-    const id = Number(request.param('id'))
-    const data = await estudiantesService.eliminarOInactivar(id)
-    return response.ok(data)
+   const id = Number(request.param('id')); // Obtiene el ID del estudiante desde la URL
+  const { action } = request.qs();  // Obtener el parámetro de consulta 'action' (activar, inactivar, eliminar)
+
+  try {
+    let data;
+
+    // Verificamos la acción
+    if (action === 'activar') {
+      data = await estudiantesService.activarEstudiante(id); // Activar al estudiante
+    } else if (action === 'inactivar') {
+      data = await estudiantesService.eliminarOInactivar(id); // Inactivar o eliminar dependiendo del historial
+    } else {
+      return response.status(400).send({ error: 'Acción no válida' }); // Si la acción no es válida
+    }
+
+    return response.ok(data); // Devuelve la respuesta con el estado de la acción
+
+  } catch (error) {
+    return response.status(500).send({ error: 'Error al procesar la solicitud' });
   }
+}
+
 
   // ===== Notificaciones =====
   public async notificaciones({ request, response }: HttpContext) {

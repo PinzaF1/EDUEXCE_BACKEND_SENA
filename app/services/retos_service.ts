@@ -150,7 +150,7 @@ async crearReto(d: {
     area,
     cantidad: TARGET,
     id_institucion: d.id_institucion,
-    time_limit_seconds: null,
+    time_limit_seconds: 60,
   } as any)
 
   // 2) Completar desde banco si faltan
@@ -180,14 +180,14 @@ async crearReto(d: {
           opciones: (r as any).opciones,
           respuesta_correcta: (r as any).respuesta_correcta,
           explicacion: (r as any).explicacion,
-          time_limit_seconds: null,
+          time_limit_seconds: 60,
         })
       }
     }
   }
 
-  // ⚠️ Serializamos para DBs con columnas TEXT
-  const reglasObj = { limite_seg: null, preguntas: elegidas.map(mapPreguntaForClient) }
+  //  Serializamos para DBs con columnas TEXT
+  const reglasObj = { limite_seg: 60, preguntas: elegidas.map(mapPreguntaForClient) }
   const participantesArr = [d.creado_por, oponente]
 
   const reto = await Reto.create({
