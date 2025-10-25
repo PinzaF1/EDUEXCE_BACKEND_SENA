@@ -9,6 +9,15 @@ import { DateTime } from 'luxon'
 
 type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
 
+function parseJsonSafe<T = any>(raw: any, fallback: T = null as any): T {
+  try {
+    if (raw == null) return fallback
+    if (typeof raw === 'string') return JSON.parse(raw)
+    if (typeof raw === 'object') return raw as T
+  } catch {}
+  return fallback
+}
+
 function parseIds(raw: any): number[] {
   try {
     if (Array.isArray(raw)) return raw.map((x) => Number(x)).filter(Number.isFinite)
@@ -53,6 +62,35 @@ export default class RetosService {
   ia = new IaService()
 
   /* ===================== OPONENTES ===================== */
+  async marcadorUsuario(id_usuario: number, id_institucion: number) {
+    // Trae SOLO lo necesario
+    const rows = await Reto.query()
+      .where('id_institucion', id_institucion)
+      .where('estado', 'finalizado')
+      .select(['id_reto', 'participantes_json', 'resultados_json'])
+
+    let victorias = 0
+    let derrotas  = 0
+
+    for (const r of rows as any[]) {
+      const parts = parseJsonSafe<any[]>(r.participantes_json, [])
+      const res   = parseJsonSafe<any>(r.resultados_json, {})
+
+      // si no está en los participantes, sigue
+      const participa = Array.isArray(parts) && parts.map(Number).includes(Number(id_usuario))
+      if (!participa) continue
+
+      const ganadorId = Number(res?.ganador_id ?? NaN)
+      if (!Number.isFinite(ganadorId)) continue // aún sin ganador → no cuenta
+
+      if (ganadorId === Number(id_usuario)) victorias++
+      else derrotas++
+    }
+
+    return { victorias, derrotas }
+  }
+  
+  
   async listarOponentes(d: { id_institucion: number; solicitante_id: number; q?: string }) {
     // Retos activos -> usuarios “ocupados”
     const activos = await Reto.query()
@@ -312,11 +350,14 @@ async aceptarReto(id_reto: number, id_usuario_invitado: number) {
     mapSesiones.push({ id_usuario: uid, id_sesion })
   }
 
-  // 5) Persistir estado, participantes y mapeo de sesiones
-  ;(reto as any).estado = 'en_curso'
-  ;(reto as any).participantes_json = participantes
-  ;(reto as any).resultados_json = { sesiones_por_usuario: mapSesiones }
-  await reto.save()
+
+    ;(reto as any).estado = 'en_curso'
+    ;(reto as any).participantes_json = JSON.stringify(participantes)
+    ;(reto as any).resultados_json = { sesiones_por_usuario: mapSesiones }
+
+    await reto.save()
+
+
 
   // 6) Respuesta que tu Android ya consume
   return {
@@ -424,7 +465,7 @@ async responderRonda(d: {
 
   // === Procesar respuestas ===
   let correctas = 0
-  let tiempo_total_seg = 0
+  let tiempo_total_seg = 60
   for (const r of d.respuestas || []) {
     const det = detalles.find((x: any) => Number(x.orden) === Number(r.orden))
     if (!det) continue
@@ -484,25 +525,42 @@ async responderRonda(d: {
     if (idx >= 0) resObj.sesiones_por_usuario[idx] = { ...resObj.sesiones_por_usuario[idx], ...payloadSes }
     else resObj.sesiones_por_usuario.push(payloadSes)
 
-    ;(reto as any).resultados_json = resObj
+    // ...
+;(reto as any).resultados_json = JSON.stringify(resObj) // << stringify SIEMPRE
+await reto.save()
+
+// Si ambos terminaron:
+if (resumenReto.jugadores.length >= 2 && resumenReto.ganador != null) {
+  ;(reto as any).estado = 'finalizado'
+  try {
+    const raw = (reto as any).resultados_json
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+    obj.ganador_id = resumenReto.ganador
+    ;(reto as any).resultados_json = JSON.stringify(obj) // << stringify
     await reto.save()
+  } catch {}
+}
+
 
     // 2) Construir SIEMPRE el mismo resumen para ambos
     const snap = await buildResumen(reto)
     resumenReto = { ...snap }
 
     // 3) Si ambos terminaron, cerrar reto y fijar ganador en resultados_json
-    if (resumenReto.jugadores.length >= 2 && resumenReto.ganador != null) {
-      ;(reto as any).estado = 'finalizado'
-      try {
-        const raw = (reto as any).resultados_json
-        const obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
-        obj.ganador_id = resumenReto.ganador
-        ;(reto as any).resultados_json = obj
-        await reto.save()
-      } catch {}
-    }
-  }
+   if (resumenReto.jugadores.length >= 2 && resumenReto.ganador != null) {
+  ;(reto as any).estado = 'finalizado'
+  try {
+    const raw = (reto as any).resultados_json
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+    obj.ganador_id = resumenReto.ganador
+    ;(reto as any).resultados_json = obj
+    await reto.save()
+  } catch {}
+  // ---> NUEVO: aplicar marcador (idempotente)
+  await this._aplicarMarcadoresFinal(reto, resumenReto.ganador)
+}
+
+
 
   // === Respuesta (misma estructura para los dos jugadores) ===
   return {
@@ -511,6 +569,7 @@ async responderRonda(d: {
     puntaje: Number((ses as any).puntaje_porcentaje),
     resumenReto, // { id_reto, jugadores: [{id_usuario, correctas, tiempo_total_seg}], ganador }
   }
+}
 }
 
 
@@ -565,7 +624,7 @@ async responderRonda(d: {
       if (!ses) continue
 
       let correctas = Number((ses as any).correctas) || 0
-      let tiempo = 0
+      let tiempo = 60
 
       const dets = await SesionDetalle.query().where('id_sesion', Number((ses as any).id_sesion))
       if (!correctas) {
@@ -588,19 +647,29 @@ async responderRonda(d: {
     // Finaliza cuando todos respondieron
     const respondedAll = jugadores.length >= participantes.length && jugadores.every(j => j.correctas >= 0)
     if (respondedAll) {
-      let resObj: any = {}
-      try {
-        const raw = (reto as any).resultados_json
-        resObj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
-      } catch {}
+  let resObj: any = {}
+  try {
+    const raw = (reto as any).resultados_json
+    resObj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+  } catch {}
+  resObj.ganador_id = ganador
+  try {
+    reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) }) // << stringify
+    await reto.save()
+  } catch {
+    reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) }) // << stringify
+    await reto.save()
+  }
+
       resObj.ganador_id = ganador
-      try {
-        reto.merge({ estado: 'finalizado', resultados_json: resObj })
-        await reto.save()
-      } catch {
-        reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) })
-        await reto.save()
-      }
+          try {
+            reto.merge({ estado: 'finalizado', resultados_json: resObj })
+            await reto.save()
+          } catch {
+            reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) })
+            await reto.save()
+          }
+          await this._aplicarMarcadoresFinal(reto as any, ganador ?? null)
     }
 
     return {
@@ -817,5 +886,44 @@ async arranqueReto(id_reto: number, id_usuario: number) {
     oponente,
   }
 }
+
+  
+// Dentro de export default class RetosService { ... }
+private async _aplicarMarcadoresFinal(reto: any, ganadorId: number | null) {
+  try {
+    // Parse participantes desde el JSON flexible que ya usas
+    const participantes = parseIds((reto as any).participantes_json);
+
+    // Evitar doble conteo: marcamos en resultados_json
+    let resObj: any = {};
+    try {
+      const raw = (reto as any).resultados_json;
+      resObj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {});
+    } catch {}
+
+    if (resObj?._marcadores_aplicados) return; // ya se aplicó
+
+    // Sumar 1 victoria al ganador y 1 derrota a los demás
+    if (Number.isFinite(Number(ganadorId))) {
+      const ganador = Number(ganadorId);
+      // +1 victoria
+      await Usuario.query().where('id_usuario', ganador).increment('victorias', 1);
+      // +1 derrota a todo el que no sea el ganador
+      const perdedores = participantes.filter((id) => Number(id) !== ganador);
+      if (perdedores.length) {
+        await Usuario.query().whereIn('id_usuario', perdedores).increment('derrotas', 1);
+      }
+    }
+
+    // Persistir marca para no volver a contar
+    resObj = { ...resObj, ganador_id: ganadorId ?? null, _marcadores_aplicados: true };
+    (reto as any).resultados_json = resObj;
+    await reto.save();
+  } catch {
+    // Silencioso: no rompas el cierre del reto si falla el conteo
+  }
+}
+
+
 
 }

@@ -83,6 +83,7 @@ Route.post('movil/retos/ronda', (ctx) => new MovilController().responderRonda(ct
 Route.get('movil/retos/:id_reto/estado', (ctx) => new MovilController().estadoReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/retos', (ctx) => new MovilController().listarRetos(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/retos/:id_reto/arranque', (ctx) => new MovilController().arranqueReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('movil/retos/marcador', (ctx) => new MovilController().marcadorRetos(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 
 //PERFIL DEL ESTUDIANTE

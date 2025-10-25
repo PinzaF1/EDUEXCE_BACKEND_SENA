@@ -6,6 +6,9 @@ import Sesion from './sesione.js'
 import BancoPregunta from './banco_pregunta.js'
 
 export default class SesionDetalle extends BaseModel {
+  static knex() {
+    throw new Error('Method not implemented.')
+  }
   public static table = 'sesiones_detalles' // igual a lo que muestra tu captura
 
   @column({ isPrimary: true, columnName: 'id_detalle' }) declare id_detalle: number

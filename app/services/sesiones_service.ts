@@ -167,6 +167,20 @@ async function upsertProgresoNivel(opts: {
 /* ====================== Service ====================== */
 export default class SesionesService {
 
+  private canonAreaLabel(a: string) {
+    const t = String(a || '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .trim().toLowerCase();
+
+    if (t.startsWith('mate')) return 'Matemáticas';
+    if (t.startsWith('leng') || t.startsWith('lect')) return 'Lenguaje';
+    if (t.startsWith('cien')) return 'Ciencias Naturales';
+    if (t.startsWith('soci')) return 'Sociales';
+    if (t.startsWith('ing'))  return 'Inglés';
+    return a || 'Desconocida';
+  }
+
+
   private normalizeText(text: string): string {
     return text.trim().toLowerCase();
   }
@@ -203,7 +217,9 @@ export default class SesionesService {
     usa_estilo_kolb?: boolean
   }) {
     const now = DateTime.local()
-    let ses = await this.applySlotWhere(Sesion.query(), p).orderBy('inicio_at', 'desc').first()
+    let ses = await this.applySlotWhere(Sesion.query(), p)
+      .whereNull('fin_at')                  
+      .first()
 
     if (ses) {
       const id_sesion = Number((ses as any).id_sesion)
@@ -501,8 +517,7 @@ export default class SesionesService {
   };
 }
 
-  /* ========= CERRAR SESIÓN (SERVICE) ========= */
-async cerrarSesion(d: {
+    async cerrarSesion(d: {
   id_sesion: number
   respuestas: Array<{
     orden?: number
@@ -517,10 +532,12 @@ async cerrarSesion(d: {
   this.ensureDetalleTable()
 
   const ses = await Sesion.findOrFail(d.id_sesion)
+
   const detalles = await SesionDetalle.query()
     .where('id_sesion', (ses as any).id_sesion)
     .orderBy('orden', 'asc')
 
+  // mapa id_pregunta -> orden
   const ordenDeId = new Map<number, number>()
   for (const det of detalles as any[]) {
     const idp = Number(det.id_pregunta)
@@ -528,16 +545,25 @@ async cerrarSesion(d: {
     if (Number.isFinite(idp) && Number.isFinite(ord)) ordenDeId.set(idp, ord)
   }
 
-  // No perder respuestas si falta 'orden': conservar id_pregunta
-  const respuestas = (Array.isArray(d.respuestas) ? d.respuestas : [])
-    .map((r: any) => {
+  // ---------- Normalización de respuestas ----------
+  type RespNorm = {
+    orden: number | null
+    id_pregunta: number | null
+    opcion: string
+    tiempo_empleado_seg: number | null
+  }
+
+  const respuestas: RespNorm[] = (Array.isArray(d.respuestas) ? d.respuestas : [])
+    .map((r: any): RespNorm | null => {
       const opcion = String(r.opcion ?? r.respuesta ?? r.seleccion ?? r.alternativa ?? '')
         .trim()
         .toUpperCase()
 
       const idp = Number(r.id_pregunta ?? r.idPregunta ?? r.id ?? NaN)
       const ord = Number(r.orden ?? NaN)
-      const tiempo = r.tiempo_empleado_seg ?? null
+      const tiempo = Number.isFinite(Number(r.tiempo_empleado_seg))
+        ? Number(r.tiempo_empleado_seg)
+        : null
 
       if (Number.isFinite(ord)) {
         return { orden: ord, id_pregunta: Number.isFinite(idp) ? idp : null, opcion, tiempo_empleado_seg: tiempo }
@@ -548,9 +574,10 @@ async cerrarSesion(d: {
       }
       return null
     })
-    .filter(Boolean) as Array<{ orden: number | null; id_pregunta: number | null; opcion: string; tiempo_empleado_seg: number | null }>
+    .filter((x): x is RespNorm => x !== null)
+  // -----------------------------------------------
 
-  // Si no llegó nada util, cerramos con ceros
+  // Si no llegó nada útil: cerrar en cero
   if (respuestas.length === 0) {
     ;(ses as any).correctas = 0
     ;(ses as any).puntaje_porcentaje = 0
@@ -575,16 +602,12 @@ async cerrarSesion(d: {
     }
   }
 
-  // Fallback: si 'detalles' vino vacío, generamos un esquema mínimo por id_pregunta
+  // Fallback: si 'detalles' está vacío, generar ordenes por ids recibidos
   if ((detalles as any[]).length === 0) {
-    const idsDeRespuestas = respuestas
-      .map((x) => Number(x.id_pregunta))
-      .filter((x) => Number.isFinite(x))
-
+    const idsDeRespuestas = respuestas.map((x) => Number(x.id_pregunta)).filter((x) => Number.isFinite(x))
     const bancoTmp = idsDeRespuestas.length
       ? await BancoPregunta.query().whereIn('id_pregunta', idsDeRespuestas)
       : []
-
     let idx = 1
     for (const b of bancoTmp as any[]) {
       const idp = Number(b.id_pregunta)
@@ -594,11 +617,8 @@ async cerrarSesion(d: {
     }
   }
 
-  // Precargar banco por ids de 'detalles'
-  const idsPreg = (detalles as any[])
-    .map((x: any) => Number(x.id_pregunta))
-    .filter((x: number) => Number.isFinite(x))
-
+  // Precargar banco
+  const idsPreg = (detalles as any[]).map((x: any) => Number(x.id_pregunta)).filter((x) => Number.isFinite(x))
   const banco = idsPreg.length ? await BancoPregunta.query().whereIn('id_pregunta', idsPreg) : []
 
   const totalOpcDe = new Map<number, number>()
@@ -620,8 +640,8 @@ async cerrarSesion(d: {
     es_correcta: boolean
   }> = []
 
-  // Helper para evaluar por id si falta 'det'
-  const evaluaPorId = async (idp: number, marcadaRaw: string, _tiempo?: number | null) => {
+  // Helper si no encontramos el detalle pero sí tenemos id_pregunta
+  const evaluaPorId = async (idp: number, marcadaRaw: string) => {
     if (!totalOpcDe.has(idp) || !correctaDe.has(idp)) {
       const b = await BancoPregunta.query().where('id_pregunta', idp).first()
       if (b) {
@@ -637,55 +657,43 @@ async cerrarSesion(d: {
     const esCorrecta = !!(correcta && marcada && marcada === correcta)
     if (esCorrecta) correctas++
     const ord = ordenDeId.get(idp) ?? (detalleResumen.length + 1)
-    detalleResumen.push({
-      id_pregunta: idp,
-      orden: ord,
-      correcta: correcta || null,
-      marcada: marcada || null,
-      es_correcta: esCorrecta,
-    })
+    detalleResumen.push({ id_pregunta: idp, orden: ord, correcta: correcta || null, marcada: marcada || null, es_correcta: esCorrecta })
   }
 
+  // ---------- Procesar cada respuesta ----------
   for (const r of respuestas) {
     const idp = Number(r.id_pregunta ?? NaN)
 
-    // Buscar detalle por orden o por id_pregunta
-    let det = null as any
-    if (r.orden != null) {
-      det = (detalles as any[]).find((x) => Number(x.orden) === Number(r.orden))
-    }
-    if (!det && Number.isFinite(idp)) {
-      det = (detalles as any[]).find((x) => Number(x.id_pregunta) === idp)
-    }
+    // localizar detalle por orden o por id
+    let det: any = null
+    if (r.orden != null) det = (detalles as any[]).find((x) => Number(x.orden) === Number(r.orden))
+    if (!det && Number.isFinite(idp)) det = (detalles as any[]).find((x) => Number(x.id_pregunta) === idp)
 
-    // Si no hay 'det' pero sí id_pregunta, evaluamos por id y seguimos
+    // si no hay det pero sí id, evaluar por id y seguir
     if (!det && Number.isFinite(idp)) {
-      await evaluaPorId(idp, r.opcion, r.tiempo_empleado_seg)
+      await evaluaPorId(idp, r.opcion)
       continue
     }
     if (!det) continue
 
-    ;(det as any).alternativa_elegida = r.opcion
-    ;(det as any).tiempo_empleado_seg = r.tiempo_empleado_seg ?? null
-    ;(det as any).respondida_at = DateTime.now()
+    const alternativa_elegida = String(r.opcion || '').trim().toUpperCase().slice(0, 1)
+    const tiempo_empleado_seg = r.tiempo_empleado_seg
 
     const limite = (det as any).tiempo_asignado_seg
-
-    // 🔧 FIX: 'null' ya NO cuenta como excedido
-    const excedioTiempo =
-      limite != null &&
-      r.tiempo_empleado_seg != null &&
-      Number(r.tiempo_empleado_seg) > Number(limite)
+    const excedioTiempo = limite != null && tiempo_empleado_seg != null && tiempo_empleado_seg > Number(limite)
 
     const totalOpc = totalOpcDe.get(Number(det.id_pregunta)) ?? 4
     const correcta = (correctaDe.get(Number(det.id_pregunta)) || '') as string
-    const marcada = toLetter(r.opcion, totalOpc)
+    const marcada = toLetter(alternativa_elegida, totalOpc)
 
-    let esCorrecta = false
-    if (!excedioTiempo && correcta && marcada) esCorrecta = marcada === correcta
-
+    const esCorrecta = !excedioTiempo && !!correcta && !!marcada && marcada === correcta
     if (esCorrecta) correctas++
+
+    // Guardar con el MODELO (acepta Luxon porque tienes @column.dateTime())
+    ;(det as any).alternativa_elegida = alternativa_elegida
+    ;(det as any).tiempo_empleado_seg = tiempo_empleado_seg ?? null
     ;(det as any).es_correcta = esCorrecta
+    ;(det as any).respondida_at = DateTime.now()
     await det.save()
 
     detalleResumen.push({
@@ -696,6 +704,7 @@ async cerrarSesion(d: {
       es_correcta: esCorrecta,
     })
   }
+  // ---------------------------------------------
 
   ;(ses as any).correctas = correctas
   ;(ses as any).puntaje_porcentaje = Math.round(
@@ -734,6 +743,7 @@ async cerrarSesion(d: {
     updatedAt: (ses as any).updated_at ?? (ses as any).updatedAt ?? null,
   }
 }
+
 
 
   /* ========= SIMULACRO POR ÁREA ========= */
@@ -849,183 +859,181 @@ async cerrarSesion(d: {
   }
 
   async crearSimulacroMixto(d: { id_usuario: number; modalidad: 'facil' | 'dificil' }) {
-    this.ensureDetalleTable()
+      this.ensureDetalleTable()
 
-    const TARGET = 25
-    const AREAS: Array<'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'> = [
-      'Matematicas',
-      'Lenguaje',
-      'Ciencias',
-      'Sociales',
-      'Ingles',
-    ]
-    const porArea = 5
-    const mod = d.modalidad === 'dificil' ? 'dificil' : 'facil'
-    const nivelOrden = mod === 'dificil' ? 8 : 7
+      const TARGET = 25
+      const AREAS: Array<'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'> = [
+        'Matematicas',
+        'Lenguaje',
+        'Ciencias',
+        'Sociales',
+        'Ingles',
+      ]
+      const porArea = 5
+      const mod = d.modalidad === 'dificil' ? 'dificil' : 'facil'
+      const nivelOrden = mod === 'dificil' ? 8 : 7
 
-    await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+      await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
 
-    const ya = new Set<number>()
-    const elegidas: any[] = []
+      const ya = new Set<number>()
+      const elegidas: any[] = []
 
-    const mapBanco = (rows: any[]) =>
-      rows.map((b: any) => ({
-        id_pregunta: b.id_pregunta,
-        area: b.area,
-        subtema: b.subtema,
-        pregunta: (b as any).pregunta,
-        opciones: fmtOpciones((b as any).opciones),
-        time_limit_seconds: mod === 'dificil' ? 60 : null,
-      }))
+      const mapBanco = (rows: any[]) =>
+        rows.map((b: any) => ({
+          id_pregunta: b.id_pregunta,
+          area: b.area,
+          subtema: b.subtema,
+          pregunta: (b as any).pregunta,
+          opciones: fmtOpciones((b as any).opciones),
+          time_limit_seconds: mod === 'dificil' ? 60 : null,
+        }))
 
-    for (const area of AREAS) {
-    const faltan = () => porArea - elegidas.filter((x) => (x as any).area === area).length
-    if (faltan() <= 0) continue
+      for (const area of AREAS) {
+      const faltan = () => porArea - elegidas.filter((x) => (x as any).area === area).length
+      if (faltan() <= 0) continue
 
-    let base: any[] = []
-    try {
-      base = await BancoPregunta.query()
+      let base: any[] = []
+      try {
+        base = await BancoPregunta.query()
+          
+          .where((qb) => this.matchArea(qb, area))
+          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+          .orderByRaw('random()')
+          .limit(faltan())
+      } catch {
+        base = await BancoPregunta.query()
         
-        .where((qb) => this.matchArea(qb, area))
-        .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
-        .orderByRaw('random()')
-        .limit(faltan())
-    } catch {
-      base = await BancoPregunta.query()
-       
-        .whereILike('area', `%${area}%`)
-        .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
-        .orderByRaw('random()')
-        .limit(faltan())
-    }
+          .whereILike('area', `%${area}%`)
+          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+          .orderByRaw('random()')
+          .limit(faltan())
+      }
 
-      for (const r of base) {
-        const id = Number((r as any).id_pregunta)
-        if (elegidas.length < TARGET && !ya.has(id)) {
-          ya.add(id)
-          elegidas.push(...mapBanco([r]))
+        for (const r of base) {
+          const id = Number((r as any).id_pregunta)
+          if (elegidas.length < TARGET && !ya.has(id)) {
+            ya.add(id)
+            elegidas.push(...mapBanco([r]))
+          }
         }
       }
-    }
 
-    if (elegidas.length < TARGET) {
-      const extra = await BancoPregunta.query()
-        .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
-        .orderByRaw('random()')
-        .limit(TARGET - elegidas.length)
-      for (const r of extra) {
-        const id = Number((r as any).id_pregunta)
-        if (elegidas.length < TARGET && !ya.has(id)) {
-          ya.add(id)
-          elegidas.push(...mapBanco([r]))
+      if (elegidas.length < TARGET) {
+        const extra = await BancoPregunta.query()
+          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+          .orderByRaw('random()')
+          .limit(TARGET - elegidas.length)
+        for (const r of extra) {
+          const id = Number((r as any).id_pregunta)
+          if (elegidas.length < TARGET && !ya.has(id)) {
+            ya.add(id)
+            elegidas.push(...mapBanco([r]))
+          }
         }
       }
+
+      const sesion = await this.upStartOrReuse({
+        id_usuario: d.id_usuario,
+        area: 'Todas las areas',
+        tipo: 'simulacro_mixto',
+        nivel_orden: nivelOrden,
+        subtema: 'Todos los subtemas',
+        total_preguntas: elegidas.length,
+        modo: 'estandar',
+        usa_estilo_kolb: false,
+      })
+
+      await this.upAttachPreguntas(Number((sesion as any).id_sesion), elegidas)
+
+      return {
+        sesion,
+        totalPreguntas: elegidas.length,
+        preguntas: elegidas.map((p: any) => ({
+          id_pregunta: p.id_pregunta,
+          area: p.area,
+          subtema: p.subtema,
+          enunciado: p.pregunta,
+          opciones: fmtOpciones(p.opciones),
+        })),
+      }
     }
-
-    const sesion = await this.upStartOrReuse({
-      id_usuario: d.id_usuario,
-      area: 'Todas las areas',
-      tipo: 'simulacro_mixto',
-      nivel_orden: nivelOrden,
-      subtema: 'Todos los subtemas',
-      total_preguntas: elegidas.length,
-      modo: 'estandar',
-      usa_estilo_kolb: false,
-    })
-
-    await this.upAttachPreguntas(Number((sesion as any).id_sesion), elegidas)
-
-    return {
-      sesion,
-      totalPreguntas: elegidas.length,
-      preguntas: elegidas.map((p: any) => ({
-        id_pregunta: p.id_pregunta,
-        area: p.area,
-        subtema: p.subtema,
-        enunciado: p.pregunta,
-        opciones: fmtOpciones(p.opciones),
-      })),
-    }
-  }
 
   async cerrarSimulacroMixto(d: {
-  id_sesion: number;
-  respuestas: Array<
-    | { orden: number; opcion?: string; respuesta?: string; seleccion?: string; alternativa?: string; tiempo_empleado_seg?: number }
-    | { id_pregunta: number; opcion?: string; respuesta?: string; seleccion?: string; alternativa?: string; tiempo_empleado_seg?: number }
-  >
-}) {
-  // Cerrar la sesión actual
-  const res = await this.cerrarSesion(d as any);
+    id_sesion: number;
+    respuestas: Array<
+      | { orden: number; opcion?: string; respuesta?: string; seleccion?: string; alternativa?: string; tiempo_empleado_seg?: number }
+      | { id_pregunta: number; opcion?: string; respuesta?: string; seleccion?: string; alternativa?: string; tiempo_empleado_seg?: number }
+    >
+  }) {
+    // 1) Cierra sesión base (esto te da correctas y detalleResumen)
+    const res = await this.cerrarSesion(d as any);
 
-  // Obtener la sesión y los detalles de las preguntas
-  const ses = await Sesion.findOrFail(d.id_sesion);
-  const detalles = await SesionDetalle.query().where('id_sesion', d.id_sesion);
-  const ids = detalles.map((x: any) => Number(x.id_pregunta)).filter(Boolean);
-  
-  // Obtener las preguntas de la base de datos
-  const banco = ids.length ? await BancoPregunta.query().whereIn('id_pregunta', ids) : [];
+    // 2) Carga sesión y detalles para mapear id/orden -> área
+    const ses = await Sesion.findOrFail(d.id_sesion);
+    const detalles = await SesionDetalle.query().where('id_sesion', d.id_sesion);
 
-  // Crear un mapa para asociar el ID de la pregunta con su área
-  const areaDe = new Map<number, string>();
-  for (const b of banco as any[]) areaDe.set(Number(b.id_pregunta), String((b as any).area));
+    const ids = detalles.map((x: any) => Number(x.id_pregunta)).filter(Boolean);
+    const banco = ids.length ? await BancoPregunta.query().whereIn('id_pregunta', ids) : [];
 
-  // Inicializar el análisis de áreas
-  const areasAgg: Record<string, { total: number; ok: number }> = {};
+    // Mapas de área
+    const areaPorId = new Map<number, string>();
+    for (const b of banco as any[]) {
+      areaPorId.set(Number(b.id_pregunta), String((b as any).area || 'Desconocida'));
+    }
+    const areaPorOrden = new Map<number, string>();
+    for (const det of detalles as any[]) {
+      const ord = Number(det.orden);
+      const idp = Number(det.id_pregunta);
+      const rawArea = areaPorId.get(idp) || 'Desconocida';
+      areaPorOrden.set(ord, rawArea);
+    }
 
-  // Procesar las respuestas
-  for (const det of detalles as any[]) {
-    const idp = Number(det.id_pregunta);
-    const a = areaDe.get(idp) || 'Desconocida';
+    // 3) Fuente de verdad: detalleResumen de cerrarSesion
+    type DR = { id_pregunta?: number; orden?: number; es_correcta?: boolean };
+    const dr: DR[] = Array.isArray((res as any).detalleResumen) ? (res as any).detalleResumen : [];
 
-    // Inicializar el área si es la primera vez que aparece
-    // Inicializar el área si es la primera vez que aparece
-if (!areasAgg[a]) areasAgg[a] = { total: 0, ok: 0 };
+    const areasAgg: Record<string, { total: number; ok: number }> = {};
+    for (const item of dr) {
+      const idp = Number((item as any).id_pregunta ?? NaN);
+      const ord = Number((item as any).orden ?? NaN);
 
-// Aumentar el total de preguntas para el área
-areasAgg[a].total += 1;
+      // Resolver área por id o por orden
+      const rawArea =
+        (Number.isFinite(idp) ? areaPorId.get(idp) : undefined) ??
+        (Number.isFinite(ord) ? areaPorOrden.get(ord) : undefined) ??
+        'Desconocida';
 
-// Obtener la respuesta marcada por el usuario
-const respuesta = d.respuestas.find((r: any) => r.id_pregunta === idp)?.alternativa ?? '';
+      const area = this.canonAreaLabel(rawArea); // normaliza etiquetas
+      if (!areasAgg[area]) areasAgg[area] = { total: 0, ok: 0 };
+      areasAgg[area].total += 1;
+      if (item.es_correcta === true) areasAgg[area].ok += 1;
+    }
 
-// Obtener la respuesta correcta de la base de datos
-const respuestaCorrecta = (await BancoPregunta.query().where('id_pregunta', idp).first())?.respuesta_correcta?.toUpperCase() || '';
+    // 4) Armar resumen por área
+    const resumenAreas: Record<string, { total: number; correctas: number; porcentaje: number; puntaje_icfes: number }> = {};
+    for (const [a, v] of Object.entries(areasAgg)) {
+      const pct = v.total > 0 ? Math.round((v.ok / v.total) * 100) : 0;
+      resumenAreas[a] = { total: v.total, correctas: v.ok, porcentaje: pct, puntaje_icfes: this.icfesScore(pct) };
+    }
 
-// Verificar si la respuesta marcada es la correcta
-if (respuesta.trim().toUpperCase() === respuestaCorrecta) {
-  areasAgg[a].ok += 1; // Incrementar si la respuesta es correcta
-}
+    // 5) Global consistente
+    const total = Number((ses as any).total_preguntas) || 0;
+    const correctas = Number((res as any).correctas ?? 0);
+    const globalPct = total > 0 ? Math.round((correctas / total) * 100) : 0;
 
-// Crear el análisis por área
-const por_area: Record<string, { total: number; correctas: number; porcentaje: number; puntaje_icfes: number }> = {};
-for (const [a, v] of Object.entries(areasAgg)) {
-  const pct = v.total > 0 ? Math.round((v.ok / v.total) * 100) : 0;
-  por_area[a] = {
-    total: v.total,
-    correctas: v.ok,
-    porcentaje: pct,
-    puntaje_icfes: this.icfesScore(pct),
-  };
-}
+    return {
+      ...res,
+      nivelOrden: Number((ses as any).nivel_orden) || null,
+      resumenAreas,
+      global: {
+        total,
+        correctas,
+        porcentaje: globalPct,
+        puntaje_icfes: this.icfesScore(globalPct),
+      },
+    };
+  }
 
-  // Calcular el puntaje global
-  const total = Number((ses as any).total_preguntas) || 0;
-  const correctas = detalles.filter((det: any) => det.es_correcta).length;
-  const globalPct = total > 0 ? Math.round((correctas / total) * 100) : 0;
-
-  // Devolver la información completa
-  return {
-    ...res,
-    nivelOrden: Number((ses as any).nivel_orden) || null,
-    resumenAreas: por_area,
-    global: {
-      total,
-      correctas,
-      porcentaje: globalPct,
-      puntaje_icfes: this.icfesScore(globalPct),
-    },
-  };
-  }}
 
   /* ========= DETALLE SESIÓN ========= */
   private nivelNombre(p: number) {
