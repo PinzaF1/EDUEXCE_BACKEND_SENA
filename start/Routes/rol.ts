@@ -36,8 +36,10 @@ Route.get('kolb/preguntas', (ctx) => new MovilController().kolbItems(ctx)).use(o
 Route.post('kolb/enviar', (ctx) => new MovilController().kolbGuardar(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('kolb/resultado', (ctx) => new MovilController().kolbResultado(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
-Route.post('quizz/iniciar', (ctx) => new MovilController().quizInicialIniciar(ctx)).use(onlyRol({ rol: 'estudiante' }))
-Route.post('quiz-inicial/cerrar',(ctx) => new MovilController().quizInicialCerrar(ctx)).use(onlyRol({ rol: 'estudiante' }))
+// QUIZ INICIAL / DIAGNÓSTICO
+Route.post('quizz/iniciar',(ctx) => new MovilController().quizInicialIniciar(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('quizz/cerrar',(ctx) => new MovilController().quizInicialCerrar(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('quizz/progreso',(ctx) => new MovilController().quizInicialProgreso(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 /*MOVIL NIVELES */
 Route.post('sesion/parada', (ctx) => new MovilController().crearParada(ctx)).use(onlyRol({ rol: 'estudiante' }))
