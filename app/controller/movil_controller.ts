@@ -328,6 +328,8 @@ public async cerrarSimulacro({ request, response }: HttpContext) {
       usaEstiloKolb: false,
       inicioAt: ses.inicio_at,
       totalPreguntas: preguntas.length,
+      modalidad: mod,
+      ...(mod === 'dificil' ? { tiempoLimitePorPregunta: 60 } : {}),
     },
     totalPreguntas: preguntas.length,
     preguntas,
