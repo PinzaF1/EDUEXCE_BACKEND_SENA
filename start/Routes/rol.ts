@@ -15,6 +15,11 @@ Route.post('auth/recovery/admin/restablecer', (ctx) => new AuthController().rest
 Route.post('auth/recovery/estudiante/enviar', (ctx) => new AuthController().enviarRecoveryEstudiante(ctx))
 Route.post('auth/recovery/estudiante/restablecer', (ctx) => new AuthController().restablecerEstudiante(ctx))
 
+// ==================== RECUPERACIÓN MÓVIL (CON CÓDIGO) ====================
+Route.post('estudiante/recuperar/solicitar', (ctx) => new AuthController().solicitarCodigoEstudiante(ctx))
+Route.post('estudiante/recuperar/verificar', (ctx) => new AuthController().verificarCodigoEstudiante(ctx))
+Route.post('estudiante/recuperar/restablecer', (ctx) => new AuthController().restablecerPasswordEstudiante(ctx))
+
 // ADMINISTRADOR
 Route.get('admin/estudiantes', (ctx) => new AdminController().listarEstudiantes(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/estudiantes', (ctx) => new AdminController().crearEstudiante(ctx)).use(onlyRol({ rol: 'administrador' }))

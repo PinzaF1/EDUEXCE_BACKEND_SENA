@@ -76,5 +76,80 @@ class AuthController {
     const ok = await recuperacionService.restablecerEstudiante(token, nueva)
     return ok ? response.ok({ ok: true }) : response.badRequest({ error: 'Token inválido' })
   }
+
+  // ==================== NUEVOS ENDPOINTS PARA MÓVIL (CON CÓDIGO) ====================
+
+  public async solicitarCodigoEstudiante({ request, response }: HttpContext) {
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      
+      if (!correo) {
+        return response.badRequest({ error: 'El correo es obligatorio' })
+      }
+
+      const result = await recuperacionService.solicitarCodigoEstudiantePorCorreo(correo)
+      
+      if (result && (result as any).success) {
+        return response.ok({ 
+          success: true, 
+          message: 'Código enviado por email',
+          codigo: (result as any).codigo // Solo en desarrollo/testing
+        })
+      }
+      
+      return response.notFound({ error: 'Correo no registrado' })
+    } catch (e: any) {
+      return response.badRequest({ error: e.message || 'Error al solicitar código' })
+    }
+  }
+
+  // 2️⃣ VERIFICAR CÓDIGO - Móvil espera: POST /estudiante/recuperar/verificar
+  public async verificarCodigoEstudiante({ request, response }: HttpContext) {
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      const codigo = String(request.input('codigo') || '').trim()
+      
+      if (!correo || !codigo) {
+        return response.badRequest({ error: 'Correo y código son obligatorios' })
+      }
+
+      const valid = await recuperacionService.verificarCodigoEstudiante(correo, codigo)
+      
+      if (valid) {
+        return response.ok({ valid: true, message: 'Código válido' })
+      }
+      
+      return response.ok({ valid: false, message: 'Código inválido o expirado' })
+    } catch (e: any) {
+      return response.badRequest({ error: e.message || 'Error al verificar código' })
+    }
+  }
+
+  // 3️⃣ RESTABLECER CONTRASEÑA - Móvil espera: POST /estudiante/recuperar/restablecer
+  public async restablecerPasswordEstudiante({ request, response }: HttpContext) {
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      const codigo = String(request.input('codigo') || '').trim()
+      const nueva = String(request.input('nueva_password') || '')
+      
+      if (!correo || !codigo || !nueva) {
+        return response.badRequest({ error: 'Todos los campos son obligatorios' })
+      }
+
+      if (nueva.length < 6) {
+        return response.badRequest({ error: 'La contraseña debe tener mínimo 6 caracteres' })
+      }
+
+      const ok = await recuperacionService.restablecerPasswordConCodigo(correo, codigo, nueva)
+      
+      if (ok) {
+        return response.ok({ success: true, message: 'Contraseña restablecida exitosamente' })
+      }
+      
+      return response.badRequest({ error: 'Código inválido, expirado o ya utilizado' })
+    } catch (e: any) {
+      return response.badRequest({ error: e.message || 'Error al restablecer contraseña' })
+    }
+  }
 }
 export default AuthController
