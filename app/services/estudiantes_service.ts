@@ -648,8 +648,7 @@ public async editarComoAdmin(
     jornada?: string | null
     nombre?: string
     apellido?: string
-    is_activo?: boolean | string | number   // aceptamos alias entrante
-    is_active?: boolean | string | number
+    is_active?: boolean | string | number   // único campo admitido
   },
   ctx?: { id_institucion?: number }
 ) {
@@ -667,8 +666,8 @@ public async editarComoAdmin(
   if (typeof cambios.curso !== 'undefined')          cambios.curso             = normCurso(cambios.curso)
   if (typeof cambios.jornada !== 'undefined')        cambios.jornada           = normJornada(cambios.jornada)
 
-  // Extraer is_active/is_activo del payload y convertir a boolean
-  const isActivePayload = cambios.is_active || cambios.is_activo
+  // Extraer is_active del payload y convertir a boolean (estándar único)
+  const isActivePayload = cambios.is_active
   
   if (isActivePayload !== undefined) {
     const toBool = (v: any): boolean => {
@@ -682,8 +681,8 @@ public async editarComoAdmin(
     cambios.is_active = toBool(isActivePayload)
   }
   
-  // Eliminar is_activo para que solo quede is_active
-  delete cambios.is_activo
+  // Asegurar que no queden alias antiguos
+  delete (cambios as any).is_activo
 
   const est = await Usuario.find(id)
   if (!est) throw new Error('Estudiante no encontrado')
@@ -694,11 +693,18 @@ public async editarComoAdmin(
   }
 
   // Aplicar cambios directamente al modelo
-  Object.keys(cambios).forEach(key => {
-    if (key in est.$extras || key in est.$columns) {
-      (est as any)[key] = cambios[key]
-    }
-  })
+  // Asignar campos conocidos explícitamente para asegurar que se guarden
+  if (cambios.tipo_documento !== undefined) (est as any).tipo_documento = cambios.tipo_documento
+  if (cambios.numero_documento !== undefined) (est as any).numero_documento = cambios.numero_documento
+  if (cambios.correo !== undefined) (est as any).correo = cambios.correo
+  if (cambios.direccion !== undefined) (est as any).direccion = cambios.direccion
+  if (cambios.telefono !== undefined) (est as any).telefono = cambios.telefono
+  if (cambios.grado !== undefined) (est as any).grado = cambios.grado
+  if (cambios.curso !== undefined) (est as any).curso = cambios.curso
+  if (cambios.jornada !== undefined) (est as any).jornada = cambios.jornada
+  if (cambios.nombre !== undefined) (est as any).nombre = cambios.nombre
+  if (cambios.apellido !== undefined) (est as any).apellido = cambios.apellido
+  if (cambios.is_active !== undefined) (est as any).is_active = cambios.is_active
   
   await est.save()
   await est.refresh()

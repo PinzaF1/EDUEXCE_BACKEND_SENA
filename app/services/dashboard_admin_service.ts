@@ -11,6 +11,26 @@ function rangoMes(fecha: Date) {
   return { inicio, fin }
 }
 
+// Normalización de nombres de área a las 5 canónicas
+function norm(s: string) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+function mapArea(raw: string): Area | null {
+  const n = norm(raw)
+  if (!n) return null
+  if (n.startsWith('matematic')) return 'Matematicas'
+  if (n.startsWith('ingl')) return 'Ingles'
+  if (n.startsWith('cien')) return 'Ciencias'
+  if (n.startsWith('soci') || n.includes('socilae')) return 'Sociales'
+  if (n.includes('lect') || n.startsWith('lengua')) return 'Lenguaje'
+  return null
+}
+
 function cursoLabel(u: any) {
   const grado = (u?.grado ?? u?.grado_nombre ?? '').toString().trim()
   const grupo = (u?.grupo ?? u?.seccion ?? '').toString().trim()
@@ -45,7 +65,7 @@ export default class DashboardAdminService {
               .andWhere('inicio_at', '<', fin as any)
           )
       })
-      .select(['id_usuario', 'area', 'puntaje_porcentaje', 'inicio_at', 'fin_at'])
+      .select(['id_usuario', 'area', 'subtema', 'puntaje_porcentaje', 'inicio_at', 'fin_at'])
   }
 
   /** Bienvenida institucional */
@@ -243,7 +263,7 @@ async tarjetasPorArea(id_institucion: number) {
     fechaRef = new Date()
   ) {
     const ids = await this.idsEstudiantes(id_institucion)
-    if (!ids.length) return { items: [] as Array<{ id_usuario: number; nombre: string; curso: string; promedio: number; intentos: number }> }
+    if (!ids.length) return { items: [] as Array<{ id_usuario: number; nombre: string; curso: string; grado_curso?: string; telefono?: string|null; correo?: string|null; documento?: string; promedio: number; ultima_actividad: any; materia_critica?: { area: Area; subtema: string | null } }> }
 
     const { inicio, fin } = rangoMes(fechaRef)
     const ses = await this.baseSesionesPeriodo(ids, inicio, fin)
@@ -258,9 +278,22 @@ async tarjetasPorArea(id_institucion: number) {
     const usuarios = await Usuario
       .query()
       .whereIn('id_usuario', Array.from(porUsuario.keys()))
-      .select(['id_usuario', 'nombre', 'apellido', 'grado', 'grupo', 'curso'])
+      .select([
+        'id_usuario',
+        'nombre',
+        'apellido',
+        'grado',
+        'curso',
+        'tipo_documento',
+        'numero_documento',
+        'correo',
+        'telefono',
+        'direccion',
+        'jornada'
+      ])
+    const userById = new Map<number, any>(usuarios.map(u => [Number((u as any).id_usuario), u]))
 
-    const items: Array<{ id_usuario: number; nombre: string; curso: string; promedio: number; intentos: number }> = []
+    const items: Array<{ id_usuario: number; nombre: string; curso: string; grado_curso?: string; telefono?: string|null; correo?: string|null; documento?: string; promedio: number; ultima_actividad: any; materia_critica?: { area: Area; subtema: string | null } }> = []
 
     for (const [uid, lista] of porUsuario.entries()) {
       const v = lista.filter(x => x.puntaje_porcentaje != null)
@@ -270,13 +303,46 @@ async tarjetasPorArea(id_institucion: number) {
         : 0
 
       if (intentos >= min_intentos && promedio < umbral) {
-        const u = usuarios.find(x => x.id_usuario === uid)
-        const nombre = u ? `${u.nombre ?? ''} ${u.apellido ?? ''}`.trim() : `ID ${uid}`
+        let u = userById.get(uid)
+        if (!u) {
+          // Fallback puntual por si no vino en el batch (consistencia)
+          u = await Usuario.find(uid)
+        }
+        const nombre = u ? ((`${(u as any).nombre ?? ''} ${(u as any).apellido ?? ''}`.trim()) || String((u as any).numero_documento || `ID ${uid}`)) : `ID ${uid}`
         const curso = u ? cursoLabel(u) : 'Sin curso'
+        const gradoStr = String((u as any).grado ?? '').trim()
+        const cursoStr = String((u as any).curso ?? '').trim()
+        const grado_curso = gradoStr ? `${gradoStr}°${cursoStr}` : (cursoStr || 'Sin curso')
+        const telefono: string | null = (u as any).telefono ?? null
+        const correo: string | null = (u as any).correo ?? null
+        const tdoc = String((u as any).tipo_documento ?? '').trim()
+        const ndoc = String((u as any).numero_documento ?? '').trim()
+        const documento = [tdoc, ndoc].filter(Boolean).join(' ')
         // Obtener la última actividad
         const ultimaSesion = lista.filter(x => x.fin_at || x.inicio_at)[0]
         const ultima_actividad = ultimaSesion?.fin_at || ultimaSesion?.inicio_at || null
-        items.push({ id_usuario: uid, nombre, curso, promedio, intentos, ultima_actividad })
+        // Materia crítica: área con menor promedio y subtema más frecuente en intentos por debajo del umbral
+        let peorArea: Area | null = null
+        let peorProm = Number.POSITIVE_INFINITY
+        for (const area of AREAS) {
+          const porArea = v.filter(x => mapArea((x as any).area) === area)
+          if (!porArea.length) continue
+          const avg = Math.round(porArea.reduce((a, b) => a + Number((b as any).puntaje_porcentaje || 0), 0) / porArea.length)
+          if (avg < peorProm) { peorProm = avg; peorArea = area }
+        }
+        let subtemaTop: string | null = null
+        if (peorArea) {
+          const bajos = v.filter(x => mapArea((x as any).area) === peorArea && Number((x as any).puntaje_porcentaje || 0) < umbral)
+          const cnt = new Map<string, number>()
+          for (const s of bajos as any[]) {
+            const st = String((s as any).subtema ?? '').trim()
+            if (!st) continue
+            cnt.set(st, (cnt.get(st) || 0) + 1)
+          }
+          subtemaTop = Array.from(cnt.entries()).sort((a,b) => b[1]-a[1])[0]?.[0] ?? null
+        }
+        const materia_critica = peorArea ? { area: peorArea, subtema: subtemaTop } : undefined
+        items.push({ id_usuario: uid, nombre, curso, grado_curso, telefono, correo, documento, promedio, ultima_actividad, materia_critica })
       }
     }
 

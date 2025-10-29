@@ -95,7 +95,8 @@ export default class SeguimientoAdminService {
       .select(['id_usuario', 'area', 'subtema', 'nivel_orden', 'puntaje_porcentaje'])
 
     type NivelInfo = { nivel: number; subtema: string | null; con_dificultad: number; total: number; porcentaje: number }
-    const porAreaNivel = new Map<Area, Map<number, { difUsers: Set<number>; subtemaCount: Map<string, number> }>>()
+    // Guardamos tanto los usuarios con dificultad como el total de participantes por área y nivel
+    const porAreaNivel = new Map<Area, Map<number, { difUsers: Set<number>; totalUsers: Set<number>; subtemaCount: Map<string, number> }>>()
 
     for (const row of ses as any[]) {
       const area = mapArea(row.area)
@@ -105,10 +106,11 @@ export default class SeguimientoAdminService {
       const puntaje = Number(row.puntaje_porcentaje ?? 0)
       if (!porAreaNivel.has(area)) porAreaNivel.set(area, new Map())
       const m = porAreaNivel.get(area)!
-      if (!m.has(nivel)) m.set(nivel, { difUsers: new Set<number>(), subtemaCount: new Map<string, number>() })
+      if (!m.has(nivel)) m.set(nivel, { difUsers: new Set<number>(), totalUsers: new Set<number>(), subtemaCount: new Map<string, number>() })
       const bucket = m.get(nivel)!
       const st = String(row.subtema ?? '').trim()
       if (st) bucket.subtemaCount.set(st, (bucket.subtemaCount.get(st) || 0) + 1)
+      bucket.totalUsers.add(uid)
       if (puntaje < umbralPuntaje) bucket.difUsers.add(uid)
     }
 
@@ -119,9 +121,10 @@ export default class SeguimientoAdminService {
       const data: NivelInfo[] = []
       for (const [nivel, info] of niveles.entries()) {
         const conDif = info.difUsers.size
-        const porcentaje = totalEst ? Math.round((conDif * 100) / totalEst) : 0
+        const participantes = info.totalUsers.size || 0
+        const porcentaje = participantes ? Math.round((conDif * 100) / participantes) : 0
         const subtemaTop = Array.from(info.subtemaCount.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
-        data.push({ nivel, subtema: subtemaTop, con_dificultad: conDif, total: totalEst, porcentaje })
+        data.push({ nivel, subtema: subtemaTop, con_dificultad: conDif, total: participantes, porcentaje })
       }
       // filtrar críticos (>= minPorcentaje)
       const criticos = data.filter((x) => x.porcentaje >= minPorcentaje)

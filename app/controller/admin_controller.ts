@@ -79,7 +79,7 @@ public async editarEstudiante({ request, response }: HttpContext) {
   try {
     const id = Number(request.param('id'))
 
-    // aceptar ambos alias para el booleano
+    // aceptar únicamente is_active (estandar único)
     const cambios = request.only([
       'tipo_documento',
       'numero_documento',
@@ -91,8 +91,7 @@ public async editarEstudiante({ request, response }: HttpContext) {
       'jornada',
       'nombre',
       'apellido',
-      'is_activo',
-      'is_active', // <— añade esto
+      'is_active',
     ]) as any
 
     const auth = (request as any).authUsuario
