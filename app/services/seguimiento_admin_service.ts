@@ -67,6 +67,71 @@ export default class SeguimientoAdminService {
     return { promedio_actual: avgMes, mejora_mes: avgMes - avgPrev, estudiantes_participando: participando }
   }
 
+  // 3b) Niveles críticos por área (porcentaje de estudiantes < umbral)
+  async nivelesCriticosPorArea(
+    id_institucion: number,
+    { umbralPuntaje = 60, minPorcentaje = 60 } = {}
+  ) {
+    const { inicio, fin } = rangoMes(new Date())
+
+    const estudiantes = await Usuario.query()
+      .where('rol', 'estudiante')
+      .where('id_institucion', id_institucion)
+      .select(['id_usuario'])
+
+    const ids = estudiantes.map((e) => e.id_usuario)
+    const totalEst = ids.length
+    if (!ids.length) return { areas: [] as any[] }
+
+    const ses = await Sesion.query()
+      .whereIn('id_usuario', ids)
+      .where((q) => {
+        q.where('fin_at', '>=', inicio as any)
+          .andWhere('fin_at', '<', fin as any)
+          .orWhere((q2) =>
+            q2.whereNull('fin_at').andWhere('inicio_at', '>=', inicio as any).andWhere('inicio_at', '<', fin as any)
+          )
+      })
+      .select(['id_usuario', 'area', 'subtema', 'nivel_orden', 'puntaje_porcentaje'])
+
+    type NivelInfo = { nivel: number; subtema: string | null; con_dificultad: number; total: number; porcentaje: number }
+    const porAreaNivel = new Map<Area, Map<number, { difUsers: Set<number>; subtemaCount: Map<string, number> }>>()
+
+    for (const row of ses as any[]) {
+      const area = mapArea(row.area)
+      if (!area) continue
+      const nivel = Number(row.nivel_orden ?? 0) || 0
+      const uid = Number(row.id_usuario)
+      const puntaje = Number(row.puntaje_porcentaje ?? 0)
+      if (!porAreaNivel.has(area)) porAreaNivel.set(area, new Map())
+      const m = porAreaNivel.get(area)!
+      if (!m.has(nivel)) m.set(nivel, { difUsers: new Set<number>(), subtemaCount: new Map<string, number>() })
+      const bucket = m.get(nivel)!
+      const st = String(row.subtema ?? '').trim()
+      if (st) bucket.subtemaCount.set(st, (bucket.subtemaCount.get(st) || 0) + 1)
+      if (puntaje < umbralPuntaje) bucket.difUsers.add(uid)
+    }
+
+    const out: Array<{ area: Area; niveles_criticos: number; niveles: NivelInfo[] }> = []
+
+    for (const area of AREAS) {
+      const niveles = porAreaNivel.get(area) ?? new Map()
+      const data: NivelInfo[] = []
+      for (const [nivel, info] of niveles.entries()) {
+        const conDif = info.difUsers.size
+        const porcentaje = totalEst ? Math.round((conDif * 100) / totalEst) : 0
+        const subtemaTop = Array.from(info.subtemaCount.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+        data.push({ nivel, subtema: subtemaTop, con_dificultad: conDif, total: totalEst, porcentaje })
+      }
+      // filtrar críticos (>= minPorcentaje)
+      const criticos = data.filter((x) => x.porcentaje >= minPorcentaje)
+      // ordenar por nivel asc
+      criticos.sort((a, b) => a.nivel - b.nivel)
+      out.push({ area, niveles_criticos: criticos.length, niveles: criticos })
+    }
+
+    return { areas: out }
+  }
   // 2) Comparativo por cursos (mes actual) – promedio y progreso vs mes anterior
   async comparativoPorCursos(id_institucion: number) {
     const { inicio, fin } = rangoMes(new Date())
@@ -179,7 +244,7 @@ export default class SeguimientoAdminService {
       byArea.get(v.area)!.push({ uid: v.uid, puntaje: v.puntaje })
     }
 
-    const res: Array<{ area: Area; estado: 'Crítico'|'Atención'|'Bueno'; porcentaje_bajo: number; debajo_promedio: number }> = []
+    const res: Array<{ area: Area; estado: 'Crítico'|'Atención'|'Bueno'; porcentaje_bajo: number; debajo_promedio: number; nivel?: number | null; subtema?: string | null }> = []
 
     for (const area of AREAS) {
       const lista = byArea.get(area) ?? []
@@ -200,7 +265,25 @@ export default class SeguimientoAdminService {
         estado = pct >= critUmbral ? 'Crítico' : pct >= atenUmbral ? 'Atención' : 'Bueno'
       }
 
-      res.push({ area, estado, porcentaje_bajo: pct, debajo_promedio: debajo })
+      // detectar nivel/subtema más frecuentes donde hay bajo puntaje
+      const rowsAreaBajos = (rows as any[]).filter(
+        (s) => mapArea((s as any).area) === area && Number((s as any).puntaje_porcentaje ?? 0) < umbralPuntaje
+      )
+
+      // nivel_orden más frecuente
+      const nivelCount = new Map<number, number>()
+      const subtemaCount = new Map<string, number>()
+      for (const r of rowsAreaBajos) {
+        const n = Number((r as any).nivel_orden ?? 0)
+        if (Number.isFinite(n) && n > 0) nivelCount.set(n, (nivelCount.get(n) || 0) + 1)
+        const st = String((r as any).subtema ?? '').trim()
+        if (st) subtemaCount.set(st, (subtemaCount.get(st) || 0) + 1)
+      }
+
+      const nivelTop = Array.from(nivelCount.entries()).sort((a,b)=> b[1]-a[1])[0]?.[0] ?? null
+      const subtemaTop = Array.from(subtemaCount.entries()).sort((a,b)=> b[1]-a[1])[0]?.[0] ?? null
+
+      res.push({ area, estado, porcentaje_bajo: pct, debajo_promedio: debajo, nivel: nivelTop, subtema: subtemaTop })
     }
 
     res.sort((a, b) => b.porcentaje_bajo - a.porcentaje_bajo)
@@ -235,9 +318,12 @@ export default class SeguimientoAdminService {
         if (!peor || avg < peor.avg) peor = { area, avg }
       }
       if (peor) {
+        const nombreCompleto = `${(e as any).nombre || ''} ${(e as any).apellido || ''}`.trim() || 
+                               (e as any).apellido || 
+                               String((e as any).numero_documento)
         items.push({
           id_usuario: e.id_usuario,
-          nombre: (e as any).apellido || String((e as any).numero_documento),
+          nombre: nombreCompleto,
           curso: (e as any).curso ?? null,
           area_debil: peor.area,
           puntaje: peor.avg,
@@ -261,31 +347,59 @@ async areasActivosEnVivo(id_institucion: number, ventanaMin = 10) {
   const ids = estudiantes.map(e => e.id_usuario)
   if (!ids.length) return { islas: AREAS.map(a => ({ area: a, activos: 0 })) }
 
-  // sesiones abiertas y con actividad reciente
+  // sesiones abiertas (activas) - cualquier sesión abierta se considera activa
+  // Filtramos por ventana de tiempo más amplia (30 min) para evitar contar sesiones muy antiguas
+  const ventanaAmplia = new Date(ahora.getTime() - 30 * 60 * 1000) // 30 minutos
   const sesAbiertas = await Sesion.query()
     .whereIn('id_usuario', ids)
     .whereNull('fin_at')
     .where(q => {
-      q.where('updated_at', '>=', desde as any)  // si tienes heartbeat
-       .orWhere('inicio_at', '>=', desde as any) // fallback
+      // Incluir sesiones con actividad reciente O sesiones iniciadas recientemente
+      q.where('updated_at', '>=', ventanaAmplia as any)
+       .orWhere('created_at', '>=', ventanaAmplia as any)
+       .orWhere('inicio_at', '>=', ventanaAmplia as any)
     })
-    .select(['id_usuario','area','inicio_at','updated_at','id_sesion'] as any)
+    .orderBy('updated_at', 'desc')
+    .select(['id_usuario','area','updated_at','created_at','inicio_at','id_sesion'] as any)
 
-  // última sesión por usuario (si hay más de una abierta)
-  const ultimaPorUsuario = new Map<number, any>()
-  for (const s of sesAbiertas as any[]) {
-    const uid = Number(s.id_usuario)
-    const ts = s.updated_at ? new Date(s.updated_at).getTime()
-                            : (s.inicio_at ? new Date(s.inicio_at).getTime() : 0)
-    const cur = ultimaPorUsuario.get(uid)
-    if (!cur || ts > cur._ts) ultimaPorUsuario.set(uid, { ...s, _ts: ts })
+  // obtener solo la sesión MÁS RECIENTE por usuario (donde está practicando AHORA)
+  // Ordenar por múltiples campos para asegurar que tomamos la más reciente
+  const sesOrdenadas = (sesAbiertas as any[]).sort((a, b) => {
+    // Primero por updated_at
+    const upA = new Date(a.updated_at || 0).getTime()
+    const upB = new Date(b.updated_at || 0).getTime()
+    if (upA !== upB) return upB - upA
+    
+    // Luego por created_at
+    const crA = new Date(a.created_at || 0).getTime()
+    const crB = new Date(b.created_at || 0).getTime()
+    if (crA !== crB) return crB - crA
+    
+    // Finalmente por inicio_at
+    const inA = new Date(a.inicio_at || 0).getTime()
+    const inB = new Date(b.inicio_at || 0).getTime()
+    return inB - inA
+  })
+  
+  const sesPorUsuario = new Map<number, any>()
+  for (const s of sesOrdenadas) {
+    const idUser = Number(s.id_usuario)
+    if (!sesPorUsuario.has(idUser)) {
+      sesPorUsuario.set(idUser, s)
+    }
   }
 
-  // contar por área normalizada
+  // contar por área (cada usuario cuenta solo una vez)
   const porArea = new Map<Area, number>()
-  for (const s of ultimaPorUsuario.values()) {
-    const a = mapArea(s.area)
-    if (!a) continue
+  for (const s of sesPorUsuario.values()) {
+    // Verificar que el área no sea null o undefined
+    if (!s.area) continue
+    const a = mapArea(String(s.area))
+    if (!a) {
+      // Debug: si no se mapea, podría ser un problema de normalización
+      console.warn(`[areasActivosEnVivo] Área no reconocida: ${s.area}`)
+      continue
+    }
     porArea.set(a, (porArea.get(a) || 0) + 1)
   }
 

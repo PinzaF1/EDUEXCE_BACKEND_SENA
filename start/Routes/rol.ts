@@ -69,6 +69,7 @@ Route.get('movil/progreso/historial/:id_sesion', (ctx) => new MovilController().
 Route.get('web/seguimiento/resumen',            (ctx) => new AdminController().webSeguimientoResumen(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/cursos',             (ctx) => new AdminController().webSeguimientoCursos(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/areas-refuerzo',     (ctx) => new AdminController().webAreasRefuerzo(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('web/seguimiento/areas-refuerzo-detalle', (ctx) => new AdminController().webAreasRefuerzoDetalle(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/estudiantes-alerta', (ctx) => new AdminController().webEstudiantesAlerta(ctx)).use(onlyRol({ rol: 'administrador' }))
 
 //INICIO WEB

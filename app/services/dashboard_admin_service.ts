@@ -71,17 +71,8 @@ async tarjetasPorArea(id_institucion: number) {
     .whereNull('fin_at') // ← clave para que baje de un área y suba en la otra
     .select(['id_usuario', 'area', 'inicio_at'])
 
-  // por si existiera más de una abierta (no debería), nos quedamos con la más reciente
-  const ultimaAbiertaPorUsuario = new Map<number, any>()
+  // contar TODAS las sesiones abiertas por área (permite múltiples áreas simultáneas)
   for (const s of abiertas as any[]) {
-    const uid = Number(s.id_usuario)
-    const prev = ultimaAbiertaPorUsuario.get(uid)
-    if (!prev || new Date(s.inicio_at) > new Date(prev.inicio_at)) {
-      ultimaAbiertaPorUsuario.set(uid, s)
-    }
-  }
-
-  for (const s of ultimaAbiertaPorUsuario.values()) {
     const a = String((s as any).area || '').trim()
     if (a === 'Matematicas') res.Matematicas++
     else if (a === 'Lenguaje') res.Lenguaje++
@@ -282,7 +273,10 @@ async tarjetasPorArea(id_institucion: number) {
         const u = usuarios.find(x => x.id_usuario === uid)
         const nombre = u ? `${u.nombre ?? ''} ${u.apellido ?? ''}`.trim() : `ID ${uid}`
         const curso = u ? cursoLabel(u) : 'Sin curso'
-        items.push({ id_usuario: uid, nombre, curso, promedio, intentos })
+        // Obtener la última actividad
+        const ultimaSesion = lista.filter(x => x.fin_at || x.inicio_at)[0]
+        const ultima_actividad = ultimaSesion?.fin_at || ultimaSesion?.inicio_at || null
+        items.push({ id_usuario: uid, nombre, curso, promedio, intentos, ultima_actividad })
       }
     }
 

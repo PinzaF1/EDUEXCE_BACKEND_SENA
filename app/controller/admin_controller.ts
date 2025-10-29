@@ -239,6 +239,45 @@ public async editarEstudiante({ request, response }: HttpContext) {
       porcentaje_bajo: Number(a.porcentaje_bajo ?? 0),
       porcentaje: Number(a.porcentaje_bajo ?? 0),
       debajo_promedio: Number(a.debajo_promedio ?? 0),
+      nivel: a.nivel ?? null,
+      subtema: a.subtema ?? null,
+    }))
+
+    items.sort((x, y) => ORDER.indexOf(x.area) - ORDER.indexOf(y.area))
+
+    return response.ok({ areas: items })
+  }
+
+  // ====== WEB: Áreas → Niveles críticos (detalle) ======
+  public async webAreasRefuerzoDetalle({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const { umbral_puntaje = 60, min_porcentaje = 60 } = request.qs() as any
+
+    const { areas } = await (seguimientoService as any).nivelesCriticosPorArea(Number(auth.id_institucion), {
+      umbralPuntaje: Number(umbral_puntaje),
+      minPorcentaje: Number(min_porcentaje),
+    })
+
+    const display: Record<string, string> = {
+      Matematicas: 'Matematicas',
+      Ingles: 'Ingles',
+      Lenguaje: 'Lectura Crítica',
+      Ciencias: 'Ciencias Naturales',
+      Sociales: 'Sociales y Ciudadanas',
+    }
+
+    const ORDER = ['Lectura Crítica', 'Matematicas', 'Sociales y Ciudadanas', 'Ciencias Naturales', 'Ingles']
+
+    const items = (areas as any[]).map((a) => ({
+      area: display[a.area] ?? a.area,
+      niveles_criticos: Number(a.niveles_criticos ?? 0),
+      niveles: (a.niveles || []).map((n: any) => ({
+        nivel: Number(n.nivel ?? 0),
+        subtema: n.subtema ?? null,
+        con_dificultad: Number(n.con_dificultad ?? 0),
+        total: Number(n.total ?? 0),
+        porcentaje: Number(n.porcentaje ?? 0),
+      })),
     }))
 
     items.sort((x, y) => ORDER.indexOf(x.area) - ORDER.indexOf(y.area))

@@ -269,8 +269,12 @@ private areaKeyForStats(a?: string | null) {
 
  /* ========= QUIZ INICIAL ========= */
 async crearQuizInicial({ id_usuario }: { id_usuario: number; id_institucion?: number | null }) {
-  // no alteramos esquema
-  await Sesion.query().where('id_usuario', id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+  // Cerramos solo las sesiones de quiz inicial (mantenemos las de práctica)
+  await Sesion.query()
+    .where('id_usuario', id_usuario)
+    .whereNull('fin_at')
+    .where('tipo', 'diagnostico')
+    .update({ fin_at: DateTime.now() })
 
   const AREAS: Area[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'sociales', 'Ingles']
   const pack: any[] = []
@@ -633,8 +637,7 @@ public async ProgresoDiagnostico(
   // Validar que se haya proporcionado un área y un subtema
   if (!area || !subtema) throw new Error('area y subtema son obligatorios');
 
-  // Actualizar el estado de las sesiones previas
-  await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() });
+  // NO cerramos sesiones previas para permitir múltiples áreas activas
 
   // Evitar repetir preguntas de sesiones previas del mismo subtema
   const prev = await Sesion.query()
@@ -979,7 +982,7 @@ public async ProgresoDiagnostico(
     const area = String(d.area ?? '').trim() as Area
     const TARGET = 25
 
-    await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+    // NO cerramos sesiones previas para permitir múltiples áreas activas
 
     const elegidas: any[] = []
     const ya = new Set<number>()
@@ -1099,7 +1102,7 @@ public async ProgresoDiagnostico(
       const mod = d.modalidad === 'dificil' ? 'dificil' : 'facil'
       const nivelOrden = mod === 'dificil' ? 8 : 7
 
-      await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+      // NO cerramos sesiones previas para permitir múltiples áreas activas
 
       const ya = new Set<number>()
       const elegidas: any[] = []
