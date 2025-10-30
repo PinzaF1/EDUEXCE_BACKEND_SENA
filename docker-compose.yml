@@ -6,3 +6,19 @@ services:
       - "3333:3333"
     env_file:
       - .env.production
+    depends_on:
+      - redis
+     restart: unless-stopped
+  
+  redis:
+    image: redis:7-alpine
+    container_name: zavira-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+
+volumes:
+  redis_data:

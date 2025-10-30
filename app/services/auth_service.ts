@@ -5,7 +5,7 @@ import Institucion from '../models/institucione.js'
 import Usuario from '../models/usuario.js'
 
 const SECRET: Secret = (process.env.JWT_SECRET ?? 'secret123') as Secret
-const EXPIRES_IN: number = Number(process.env.JWT_EXPIRES_IN ?? 86400) // 1 día en segundos
+const EXPIRES_IN: number = Number(process.env.JWT_EXPIRES_IN ?? 86400) 
 
 export default class AuthService {
   // ADMIN: correo + contraseña (tabla instituciones)

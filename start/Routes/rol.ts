@@ -15,6 +15,11 @@ Route.post('auth/recovery/admin/restablecer', (ctx) => new AuthController().rest
 Route.post('auth/recovery/estudiante/enviar', (ctx) => new AuthController().enviarRecoveryEstudiante(ctx))
 Route.post('auth/recovery/estudiante/restablecer', (ctx) => new AuthController().restablecerEstudiante(ctx))
 
+// ==================== RECUPERACIÓN MÓVIL (CON CÓDIGO) ====================
+Route.post('estudiante/recuperar/solicitar', (ctx) => new AuthController().solicitarCodigoEstudiante(ctx))
+Route.post('estudiante/recuperar/verificar', (ctx) => new AuthController().verificarCodigoEstudiante(ctx))
+Route.post('estudiante/recuperar/restablecer', (ctx) => new AuthController().restablecerPasswordEstudiante(ctx))
+
 // ADMINISTRADOR
 Route.get('admin/estudiantes', (ctx) => new AdminController().listarEstudiantes(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/estudiantes', (ctx) => new AdminController().crearEstudiante(ctx)).use(onlyRol({ rol: 'administrador' }))
@@ -36,8 +41,10 @@ Route.get('kolb/preguntas', (ctx) => new MovilController().kolbItems(ctx)).use(o
 Route.post('kolb/enviar', (ctx) => new MovilController().kolbGuardar(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('kolb/resultado', (ctx) => new MovilController().kolbResultado(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
-Route.post('quizz/iniciar', (ctx) => new MovilController().quizInicialIniciar(ctx)).use(onlyRol({ rol: 'estudiante' }))
-Route.post('quiz-inicial/cerrar',(ctx) => new MovilController().quizInicialCerrar(ctx)).use(onlyRol({ rol: 'estudiante' }))
+// QUIZ INICIAL / DIAGNÓSTICO
+Route.post('quizz/iniciar',(ctx) => new MovilController().quizInicialIniciar(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('quizz/cerrar',(ctx) => new MovilController().quizInicialCerrar(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.get('quizz/progreso',(ctx) => new MovilController().quizInicialProgreso(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 /*MOVIL NIVELES */
 Route.post('sesion/parada', (ctx) => new MovilController().crearParada(ctx)).use(onlyRol({ rol: 'estudiante' }))
@@ -62,6 +69,7 @@ Route.get('movil/progreso/historial/:id_sesion', (ctx) => new MovilController().
 Route.get('web/seguimiento/resumen',            (ctx) => new AdminController().webSeguimientoResumen(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/cursos',             (ctx) => new AdminController().webSeguimientoCursos(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/areas-refuerzo',     (ctx) => new AdminController().webAreasRefuerzo(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('web/seguimiento/areas-refuerzo-detalle', (ctx) => new AdminController().webAreasRefuerzoDetalle(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.get('web/seguimiento/estudiantes-alerta', (ctx) => new AdminController().webEstudiantesAlerta(ctx)).use(onlyRol({ rol: 'administrador' }))
 
 //INICIO WEB
