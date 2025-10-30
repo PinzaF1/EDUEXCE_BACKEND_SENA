@@ -3,14 +3,14 @@
 
 const nodemailer = require('nodemailer');
 
-// CONFIGURACIÓN (cambiar si es necesario)
+// CONFIGURACIÓN BREVO (reemplaza con tus credenciales)
 const config = {
-  host: 'sandbox.smtp.mailtrap.io',
+  host: 'smtp-relay.brevo.com',
   port: 587,
   secure: false, // STARTTLS
   auth: {
-    user: 'ae008d2b60a88d',
-    pass: 'e451de5a5b6b42'
+    user: 'TU_LOGIN_BREVO_AQUI@smtp-brevo.com',  // Tu login de Brevo
+    pass: 'xsmtpsib-TU_CLAVE_SMTP_DE_BREVO_AQUI'  // La key que generaste en Brevo
   }
 };
 
@@ -43,17 +43,21 @@ transporter.verify((error, success) => {
     
     // Test 2: Enviar email de prueba
     console.log('📧 Test 2: Enviando email de prueba...');
+    console.log('   FROM: tu-email-de-registro-brevo@gmail.com (remitente verificado)');
+    console.log('   TO: tu-email-personal@gmail.com (destinatario)');
+    console.log('');
     
     transporter.sendMail({
-      from: 'no-reply@eduexce.local',
-      to: 'test@example.com', // Mailtrap captura cualquier email
-      subject: 'Test SMTP - EDUEXCE Backend',
-      text: 'Este es un email de prueba para verificar la configuración SMTP.',
+      from: 'tu-email-de-registro-brevo@gmail.com', // Email con el que te registraste en Brevo (VERIFICADO)
+      to: 'tu-email-personal@gmail.com', // Email donde quieres RECIBIR el test
+      subject: 'Test SMTP - EDUEXCE Backend con Brevo',
+      text: 'Este es un email de prueba para verificar la configuración SMTP con Brevo.',
       html: `
         <div style="font-family: Arial, sans-serif; padding: 20px;">
-          <h2 style="color: #1976D2;">🎉 Test Exitoso</h2>
-          <p>Si ves este email en Mailtrap, la configuración SMTP funciona correctamente.</p>
+          <h2 style="color: #1976D2;">🎉 Test Exitoso con Brevo</h2>
+          <p>Si ves este email en tu bandeja de entrada, ¡la configuración SMTP con Brevo funciona correctamente!</p>
           <p><strong>Fecha:</strong> ${new Date().toLocaleString()}</p>
+          <p style="color: #666; margin-top: 30px;">Este es un email de prueba del backend EDUEXCE.</p>
         </div>
       `
     }, (error, info) => {
@@ -65,7 +69,7 @@ transporter.verify((error, success) => {
         console.log('📋 Detalles:', info);
         console.log('');
         console.log('🎯 Siguiente paso:');
-        console.log('   Verifica en https://mailtrap.io/inboxes que el email haya llegado');
+        console.log('   ¡Revisa tu bandeja de entrada! El email debería llegar en segundos.');
       }
     });
   }
