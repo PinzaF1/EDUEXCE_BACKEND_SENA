@@ -318,9 +318,15 @@ async tarjetasPorArea(id_institucion: number) {
         const tdoc = String((u as any).tipo_documento ?? '').trim()
         const ndoc = String((u as any).numero_documento ?? '').trim()
         const documento = [tdoc, ndoc].filter(Boolean).join(' ')
-        // Obtener la última actividad
-        const ultimaSesion = lista.filter(x => x.fin_at || x.inicio_at)[0]
-        const ultima_actividad = ultimaSesion?.fin_at || ultimaSesion?.inicio_at || null
+        // Obtener la última actividad (ordenando por fin_at/inicio_at DESC de forma robusta)
+        const ultimaSesion = lista
+          .filter((x: any) => (x as any).fin_at || (x as any).inicio_at)
+          .sort((a: any, b: any) => {
+            const da = new Date((a as any).fin_at || (a as any).inicio_at || 0).getTime()
+            const db = new Date((b as any).fin_at || (b as any).inicio_at || 0).getTime()
+            return db - da
+          })[0]
+        const ultima_actividad = (ultimaSesion as any)?.fin_at || (ultimaSesion as any)?.inicio_at || null
         // Materia crítica: área con menor promedio y subtema más frecuente en intentos por debajo del umbral
         let peorArea: Area | null = null
         let peorProm = Number.POSITIVE_INFINITY
