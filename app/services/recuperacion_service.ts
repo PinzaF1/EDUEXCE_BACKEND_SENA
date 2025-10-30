@@ -68,14 +68,21 @@ export default class RecuperacionService {
     )
 
     const url = `${process.env.FRONT_URL ?? 'http://localhost:5173'}/restablecer?token=${token}`
-    await mailer().sendMail({
-      from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
-      to: correo,
-      subject: 'Recuperación de acceso (Administrador)',
-      text: `Recupera tu acceso aquí: ${url} (válido por 15 min)`,
-      html: `Recupera tu acceso aquí: <a href="${url}">${url}</a> (válido por 15 min)`,
-    })
-    return true
+    
+    try {
+      await mailer().sendMail({
+        from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
+        to: correo,
+        subject: 'Recuperación de acceso (Administrador)',
+        text: `Recupera tu acceso aquí: ${url} (válido por 15 min)`,
+        html: `Recupera tu acceso aquí: <a href="${url}">${url}</a> (válido por 15 min)`,
+      })
+      console.log(`✅ [Recuperación Admin] Email enviado exitosamente para: ${correo}`)
+      return true
+    } catch (error: any) {
+      console.error(`❌ [Recuperación Admin] ERROR al enviar email para ${correo}:`, error.message || error)
+      return false
+    }
   }
 
   // ADMIN: restablecer contraseña con token
@@ -100,14 +107,21 @@ export default class RecuperacionService {
     )
 
     const url = `${process.env.FRONT_URL ?? 'http://localhost:5173'}/restablecer?token=${token}`
-    await mailer().sendMail({
-      from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
-      to: correo,
-      subject: 'Recuperación de acceso (Estudiante)',
-      text: `Recupera tu acceso aquí: ${url} (válido por 15 min)`,
-      html: `Recupera tu acceso aquí: <a href="${url}">${url}</a> (válido por 15 min)`,
-    })
-    return true
+    
+    try {
+      await mailer().sendMail({
+        from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
+        to: correo,
+        subject: 'Recuperación de acceso (Estudiante)',
+        text: `Recupera tu acceso aquí: ${url} (válido por 15 min)`,
+        html: `Recupera tu acceso aquí: <a href="${url}">${url}</a> (válido por 15 min)`,
+      })
+      console.log(`✅ [Recuperación Estudiante Web] Email enviado exitosamente para: ${correo}`)
+      return true
+    } catch (error: any) {
+      console.error(`❌ [Recuperación Estudiante Web] ERROR al enviar email para ${correo}:`, error.message || error)
+      return false
+    }
   }
 
   // ESTUDIANTE: restablecer contraseña
@@ -156,27 +170,37 @@ export default class RecuperacionService {
     // Enviar email con CÓDIGO (no link)
     // Si hay SMTP configurado, envía email, sino solo log
     if (process.env.SMTP_HOST && process.env.SMTP_USER) {
-      await mailer().sendMail({
-        from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
-        to: correo,
-        subject: 'Recuperación de contraseña - Código de verificación',
-        text: `Tu código de recuperación es: ${codigo}\n\nVálido por 15 minutos.\n\nNo compartas este código con nadie.`,
-        html: `
-          <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #1976D2;">Código de Recuperación</h2>
-            <p>Tu código de verificación es:</p>
-            <div style="font-size: 36px; font-weight: bold; color: #1976D2; letter-spacing: 8px; 
-                         padding: 20px; text-align: center; background: #E3F2FD; border-radius: 8px;">
-              ${codigo}
+      try {
+        await mailer().sendMail({
+          from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
+          to: correo,
+          subject: 'Recuperación de contraseña - Código de verificación',
+          text: `Tu código de recuperación es: ${codigo}\n\nVálido por 15 minutos.\n\nNo compartas este código con nadie.`,
+          html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #1976D2;">Código de Recuperación</h2>
+              <p>Tu código de verificación es:</p>
+              <div style="font-size: 36px; font-weight: bold; color: #1976D2; letter-spacing: 8px; 
+                           padding: 20px; text-align: center; background: #E3F2FD; border-radius: 8px;">
+                ${codigo}
+              </div>
+              <p>Este código es válido por <strong>15 minutos</strong>.</p>
+              <p style="color: #666; margin-top: 30px;">Si no solicitaste este código, ignora este mensaje.</p>
             </div>
-            <p>Este código es válido por <strong>15 minutos</strong>.</p>
-            <p style="color: #666; margin-top: 30px;">Si no solicitaste este código, ignora este mensaje.</p>
-          </div>
-        `,
-      })
-      console.log(`[Recuperación] Email enviado con código para: ${correo}`)
+          `,
+        })
+        console.log(`✅ [Recuperación] Email enviado exitosamente para: ${correo}`)
+      } catch (error: any) {
+        console.error(`❌ [Recuperación] ERROR al enviar email para ${correo}:`, error.message || error)
+        console.error('Detalles del error SMTP:', {
+          host: process.env.SMTP_HOST,
+          port: process.env.SMTP_PORT,
+          user: process.env.SMTP_USER,
+          // No mostrar password por seguridad
+        })
+      }
     } else {
-      console.log(`[Recuperación] SMTP no configurado - Código generado: ${codigo} para: ${correo}`)
+      console.log(`⚠️ [Recuperación] SMTP no configurado - Código generado: ${codigo} para: ${correo}`)
     }
 
     return { success: true, codigo } // Devuelve el código para testing

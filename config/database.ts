@@ -1,6 +1,8 @@
 import env from '#start/env'
 import { defineConfig } from '@adonisjs/lucid'
 
+const isProduction = env.get('NODE_ENV') === 'production'
+
 const dbConfig = defineConfig({
   connection: 'postgres',
   connections: {
@@ -12,7 +14,8 @@ const dbConfig = defineConfig({
         user: env.get('DB_USER'),
         password: env.get('DB_PASSWORD'),
         database: env.get('DB_DATABASE'),
-        ssl: { rejectUnauthorized: false },   // 🔴 necesario para Supabase
+        // SSL solo cuando lo necesitas (Supabase/producción)
+        ssl: isProduction ? { rejectUnauthorized: false } : false,
       },
       migrations: {
         naturalSort: true,
