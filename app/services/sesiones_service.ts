@@ -255,11 +255,13 @@ private areaKeyForStats(a?: string | null) {
     await SesionDetalle.query().where('id_sesion', id_sesion).delete()
     let orden = 1
     for (const p of preguntas || []) {
+      const idPregunta = (p as any).id_pregunta
+      if (!Number.isFinite(Number(idPregunta))) continue
+      
       await SesionDetalle.create({
         id_sesion,
-        id_pregunta: Number((p as any).id_pregunta) || null,
+        id_pregunta: Number(idPregunta),
         orden,
-        tiempo_asignado_seg: (p as any).time_limit_seconds ?? null,
       } as any)
       orden++
     }
@@ -267,8 +269,12 @@ private areaKeyForStats(a?: string | null) {
 
  /* ========= QUIZ INICIAL ========= */
 async crearQuizInicial({ id_usuario }: { id_usuario: number; id_institucion?: number | null }) {
-  // no alteramos esquema
-  await Sesion.query().where('id_usuario', id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+  // Cerramos solo las sesiones de quiz inicial (mantenemos las de práctica)
+  await Sesion.query()
+    .where('id_usuario', id_usuario)
+    .whereNull('fin_at')
+    .where('tipo', 'diagnostico')
+    .update({ fin_at: DateTime.now() })
 
   const AREAS: Area[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'sociales', 'Ingles']
   const pack: any[] = []
@@ -631,8 +637,7 @@ public async ProgresoDiagnostico(
   // Validar que se haya proporcionado un área y un subtema
   if (!area || !subtema) throw new Error('area y subtema son obligatorios');
 
-  // Actualizar el estado de las sesiones previas
-  await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() });
+  // NO cerramos sesiones previas para permitir múltiples áreas activas
 
   // Evitar repetir preguntas de sesiones previas del mismo subtema
   const prev = await Sesion.query()
@@ -936,6 +941,9 @@ public async ProgresoDiagnostico(
   const inicio = (ses as any).inicio_at ? DateTime.fromISO(String((ses as any).inicio_at)) : null
   const fin = (ses as any).fin_at ? DateTime.fromISO(String((ses as any).fin_at)) : null
   const duracionSegundos = inicio && fin ? Math.max(0, Math.round(fin.diff(inicio, 'seconds').seconds)) : 0
+  const horas = Math.floor(duracionSegundos / 3600)
+  const minutos = Math.floor((duracionSegundos % 3600) / 60)
+  const segundos = duracionSegundos % 60
 
   const aprueba = correctas >= 4
   const resultado = aprueba ? 'aprobado' : 'no_aprobado'
@@ -957,6 +965,7 @@ public async ProgresoDiagnostico(
     finAt: (ses as any).fin_at,
     puntajePorcentaje: (ses as any).puntaje_porcentaje,
     duracionSegundos,
+    duracion: { horas, minutos, segundos },
     resultado,
     detalleResumen,
     createdAt: (ses as any).created_at ?? (ses as any).createdAt ?? null,
@@ -973,7 +982,7 @@ public async ProgresoDiagnostico(
     const area = String(d.area ?? '').trim() as Area
     const TARGET = 25
 
-    await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+    // NO cerramos sesiones previas para permitir múltiples áreas activas
 
     const elegidas: any[] = []
     const ya = new Set<number>()
@@ -1093,7 +1102,7 @@ public async ProgresoDiagnostico(
       const mod = d.modalidad === 'dificil' ? 'dificil' : 'facil'
       const nivelOrden = mod === 'dificil' ? 8 : 7
 
-      await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+      // NO cerramos sesiones previas para permitir múltiples áreas activas
 
       const ya = new Set<number>()
       const elegidas: any[] = []
@@ -1168,13 +1177,19 @@ public async ProgresoDiagnostico(
       return {
         sesion,
         totalPreguntas: elegidas.length,
-        preguntas: elegidas.map((p: any) => ({
-          id_pregunta: p.id_pregunta,
-          area: p.area,
-          subtema: p.subtema,
-          enunciado: p.pregunta,
-          opciones: fmtOpciones(p.opciones),
-        })),
+        preguntas: elegidas.map((p: any) => {
+          const base: any = {
+            id_pregunta: p.id_pregunta,
+            area: p.area,
+            subtema: p.subtema,
+            enunciado: p.pregunta,
+            opciones: fmtOpciones(p.opciones),
+          };
+          if (p.time_limit_seconds != null) {
+            base.time_limit_seconds = p.time_limit_seconds;
+          }
+          return base;
+        }),
       }
     }
 

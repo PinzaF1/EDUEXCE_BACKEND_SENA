@@ -79,7 +79,7 @@ public async editarEstudiante({ request, response }: HttpContext) {
   try {
     const id = Number(request.param('id'))
 
-    // aceptar ambos alias para el booleano
+    // aceptar únicamente is_active (estandar único)
     const cambios = request.only([
       'tipo_documento',
       'numero_documento',
@@ -91,8 +91,7 @@ public async editarEstudiante({ request, response }: HttpContext) {
       'jornada',
       'nombre',
       'apellido',
-      'is_activo',
-      'is_active', // <— añade esto
+      'is_active',
     ]) as any
 
     const auth = (request as any).authUsuario
@@ -108,27 +107,27 @@ public async editarEstudiante({ request, response }: HttpContext) {
 
 
   public async eliminarEstudiante({ request, response }: HttpContext) {
-   const id = Number(request.param('id')); // Obtiene el ID del estudiante desde la URL
-  const { action } = request.qs();  // Obtener el parámetro de consulta 'action' (activar, inactivar, eliminar)
+    const id = Number(request.param('id'))
+    const { action } = request.qs() as any // opcional: 'activar' | 'inactivar' | 'eliminar'
 
-  try {
-    let data;
+    try {
+      // Si piden activar explícitamente
+      if (String(action).toLowerCase() === 'activar') {
+        const data = await estudiantesService.activarEstudiante(id)
+        return response.ok(data)
+      }
 
-    // Verificamos la acción
-    if (action === 'activar') {
-      data = await estudiantesService.activarEstudiante(id); // Activar al estudiante
-    } else if (action === 'inactivar') {
-      data = await estudiantesService.eliminarOInactivar(id); // Inactivar o eliminar dependiendo del historial
-    } else {
-      return response.status(400).send({ error: 'Acción no válida' }); // Si la acción no es válida
+      // Comportamiento por defecto para DELETE:
+      // si tiene historial → inactivar; si no tiene → eliminar
+      const data = await estudiantesService.eliminarOInactivar(id)
+      if ((data as any).estado === 'inactivado') {
+        return response.status(409).send({ error: 'Tiene historial; se inactivó en lugar de eliminar', ...data })
+      }
+      return response.ok(data)
+    } catch (e) {
+      return response.status(500).send({ error: 'Error al procesar la solicitud' })
     }
-
-    return response.ok(data); // Devuelve la respuesta con el estado de la acción
-
-  } catch (error) {
-    return response.status(500).send({ error: 'Error al procesar la solicitud' });
   }
-}
 
 
   // ===== Notificaciones =====
@@ -239,6 +238,45 @@ public async editarEstudiante({ request, response }: HttpContext) {
       porcentaje_bajo: Number(a.porcentaje_bajo ?? 0),
       porcentaje: Number(a.porcentaje_bajo ?? 0),
       debajo_promedio: Number(a.debajo_promedio ?? 0),
+      nivel: a.nivel ?? null,
+      subtema: a.subtema ?? null,
+    }))
+
+    items.sort((x, y) => ORDER.indexOf(x.area) - ORDER.indexOf(y.area))
+
+    return response.ok({ areas: items })
+  }
+
+  // ====== WEB: Áreas → Niveles críticos (detalle) ======
+  public async webAreasRefuerzoDetalle({ request, response }: HttpContext) {
+    const auth = (request as any).authUsuario
+    const { umbral_puntaje = 60, min_porcentaje = 60 } = request.qs() as any
+
+    const { areas } = await (seguimientoService as any).nivelesCriticosPorArea(Number(auth.id_institucion), {
+      umbralPuntaje: Number(umbral_puntaje),
+      minPorcentaje: Number(min_porcentaje),
+    })
+
+    const display: Record<string, string> = {
+      Matematicas: 'Matematicas',
+      Ingles: 'Ingles',
+      Lenguaje: 'Lectura Crítica',
+      Ciencias: 'Ciencias Naturales',
+      Sociales: 'Sociales y Ciudadanas',
+    }
+
+    const ORDER = ['Lectura Crítica', 'Matematicas', 'Sociales y Ciudadanas', 'Ciencias Naturales', 'Ingles']
+
+    const items = (areas as any[]).map((a) => ({
+      area: display[a.area] ?? a.area,
+      niveles_criticos: Number(a.niveles_criticos ?? 0),
+      niveles: (a.niveles || []).map((n: any) => ({
+        nivel: Number(n.nivel ?? 0),
+        subtema: n.subtema ?? null,
+        con_dificultad: Number(n.con_dificultad ?? 0),
+        total: Number(n.total ?? 0),
+        porcentaje: Number(n.porcentaje ?? 0),
+      })),
     }))
 
     items.sort((x, y) => ORDER.indexOf(x.area) - ORDER.indexOf(y.area))
