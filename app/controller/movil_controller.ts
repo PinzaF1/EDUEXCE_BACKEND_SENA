@@ -328,6 +328,8 @@ public async cerrarSimulacro({ request, response }: HttpContext) {
       usaEstiloKolb: false,
       inicioAt: ses.inicio_at,
       totalPreguntas: preguntas.length,
+      modalidad: mod,
+      ...(mod === 'dificil' ? { tiempoLimitePorPregunta: 60 } : {}),
     },
     totalPreguntas: preguntas.length,
     preguntas,
@@ -600,32 +602,45 @@ public async progresoHistorialDetalle({ request, response }: HttpContext) {
       return response.ok(data) // { victorias: X, derrotas: Y }
     }
 
+  // ===== QUIZ INICIAL: iniciar =====
+public async quizInicialIniciar({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const data = await sesionesService.crearQuizInicial({
+    id_usuario: Number(auth.id_usuario),
+    id_institucion: Number(auth.id_institucion) || null,
+  })
+  return response.created(data) // 201
+}
+
+// ===== QUIZ INICIAL: cerrar =====
+public async quizInicialCerrar({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const { id_sesion, respuestas } = request.only(['id_sesion', 'respuestas']) as any
+
+  const data = await sesionesService.cerrarQuizInicial({
+    id_sesion: Number(id_sesion),
+    respuestas: Array.isArray(respuestas) ? respuestas : [],
+  })
+
+  return response.ok({ id_usuario: Number(auth.id_usuario), ...data }) // 200
+}
+
+// ===== QUIZ INICIAL: progreso (cards por área) =====
+
+public async quizInicialProgreso({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario;
+  const idSesion = request.qs().id_sesion ? Number(request.qs().id_sesion) : undefined;
+
+  const data = await sesionesService.ProgresoDiagnostico({
+    id_usuario: Number(auth.id_usuario),
+    id_sesion: idSesion, // ← opcional: fija una sesión concreta
+  });
+
+  return response.ok(data);
+}
 
 
 
-
-  // ============ QUIZ INICIAL (DIAGNÓSTICO) ============ 
-  public async quizInicialIniciar({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const data = await (sesionesService as any).crearQuizInicial({
-      id_usuario: Number(auth.id_usuario),
-      id_institucion: Number(auth.id_institucion) || null,
-    })
-    return response.created(data)
-  }
-
-  public async quizInicialCerrar({ request, response }: HttpContext) {
-    const auth = (request as any).authUsuario
-    const { id_sesion, respuestas } = request.only(['id_sesion', 'respuestas']) as any
-
-    const data = await (sesionesService as any).cerrarQuizInicial({
-      id_sesion: Number(id_sesion),
-      respuestas: Array.isArray(respuestas) ? respuestas : [],
-    })
-
-    // Devuelve lo que pide: puntajes por área, global y detalle con explicación
-    return response.ok({ id_usuario: Number(auth.id_usuario), ...data })
-  }
 
  // PUT /movil/mi-perfil/:id  -> estudiante: SOLO correo, direccion, telefono (+ foto_url)
 public async editarMiPerfilContacto({ request, response }: HttpContext) {

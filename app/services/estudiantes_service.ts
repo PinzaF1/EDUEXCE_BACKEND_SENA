@@ -480,7 +480,23 @@ export default class EstudiantesService {
           .orWhereILike('correo', s)
       })
     }
-    return await q.orderBy('apellido', 'asc').orderBy('nombre', 'asc')
+    const estudiantes = await q.orderBy('apellido', 'asc').orderBy('nombre', 'asc')
+    
+    // Agregar última actividad desde sesiones
+    const estudiantesConActividad = await Promise.all(
+      estudiantes.map(async (e: any) => {
+        const ultimaSesion = await Sesion.query()
+          .where('id_usuario', e.id_usuario)
+          .orderBy('inicio_at', 'desc')
+          .first()
+        return {
+          ...e.toJSON(),
+          ultima_actividad: ultimaSesion?.inicio_at ?? null
+        }
+      })
+    )
+    
+    return estudiantesConActividad
   }
 
     // GET /estudiante/perfil (por token)
@@ -593,10 +609,10 @@ async actualizarContacto(id_usuario: number, body: any) {
   // ===== Eliminar si no tiene historial, si no → inactivar =====
 
  async activarEstudiante(id_usuario: number) {
-    const usuario = await Usuario.findOrFail(id_usuario);
-    usuario.is_active = true; // Cambiar is_active a true
-    await usuario.save();
-    return { estado: 'activado' as const }; // Devuelve un mensaje indicando que se activó
+      const usuario = await Usuario.findOrFail(id_usuario);
+      usuario.is_active = true;
+      await usuario.save();
+      return { estado: 'activado' as const };
   }
 
   // Función para inactivar o eliminar un estudiante
@@ -605,8 +621,8 @@ async actualizarContacto(id_usuario: number, body: any) {
  
   if (sesiones.length > 0) {
       const usuario = await Usuario.findOrFail(id_usuario);
-      usuario.is_active = false;  // Desactivar el usuario
-      await usuario.save();  // Guardar cambios
+      usuario.is_active = false;
+      await usuario.save();
       return { estado: 'inactivado' as const };
   } else {
       const usuario = await Usuario.findOrFail(id_usuario);
@@ -632,8 +648,7 @@ public async editarComoAdmin(
     jornada?: string | null
     nombre?: string
     apellido?: string
-    is_activo?: boolean | string | number   // aceptamos alias entrante
-    is_active?: boolean | string | number
+    is_active?: boolean | string | number   // único campo admitido
   },
   ctx?: { id_institucion?: number }
 ) {
@@ -651,19 +666,23 @@ public async editarComoAdmin(
   if (typeof cambios.curso !== 'undefined')          cambios.curso             = normCurso(cambios.curso)
   if (typeof cambios.jornada !== 'undefined')        cambios.jornada           = normJornada(cambios.jornada)
 
-  // parseo robusto del boolean
-  const toBool = (v: any): boolean | undefined => {
-    if (v === true || v === false) return v
-    if (v == null) return undefined
-    const s = String(v).trim().toLowerCase()
-    if (['true','1','sí','si'].includes(s)) return true
-    if (['false','0','no'].includes(s))     return false
-    return undefined
+  // Extraer is_active del payload y convertir a boolean (estándar único)
+  const isActivePayload = cambios.is_active
+  
+  if (isActivePayload !== undefined) {
+    const toBool = (v: any): boolean => {
+      if (v === true || v === false) return v
+      if (v == null) return false
+      const s = String(v).trim().toLowerCase()
+      if (['true','1','sí','si','yes'].includes(s)) return true
+      if (['false','0','no','n'].includes(s)) return false
+      return false
+    }
+    cambios.is_active = toBool(isActivePayload)
   }
-  let nextActive = toBool(cambios.is_active)
-  if (typeof nextActive === 'undefined') nextActive = toBool(cambios.is_activo)
-  delete cambios.is_active
-  delete cambios.is_activo
+  
+  // Asegurar que no queden alias antiguos
+  delete (cambios as any).is_activo
 
   const est = await Usuario.find(id)
   if (!est) throw new Error('Estudiante no encontrado')
@@ -673,14 +692,23 @@ public async editarComoAdmin(
     if (!mismoColegio) throw new Error('No autorizado para editar estudiantes de otra institución')
   }
 
-  // aplica estado (DB tiene is_active)
-  if (typeof nextActive !== 'undefined') {
-    (est as any).is_active = nextActive
-  }
-
-  est.merge(cambios)
+  // Aplicar cambios directamente al modelo
+  // Asignar campos conocidos explícitamente para asegurar que se guarden
+  if (cambios.tipo_documento !== undefined) (est as any).tipo_documento = cambios.tipo_documento
+  if (cambios.numero_documento !== undefined) (est as any).numero_documento = cambios.numero_documento
+  if (cambios.correo !== undefined) (est as any).correo = cambios.correo
+  if (cambios.direccion !== undefined) (est as any).direccion = cambios.direccion
+  if (cambios.telefono !== undefined) (est as any).telefono = cambios.telefono
+  if (cambios.grado !== undefined) (est as any).grado = cambios.grado
+  if (cambios.curso !== undefined) (est as any).curso = cambios.curso
+  if (cambios.jornada !== undefined) (est as any).jornada = cambios.jornada
+  if (cambios.nombre !== undefined) (est as any).nombre = cambios.nombre
+  if (cambios.apellido !== undefined) (est as any).apellido = cambios.apellido
+  if (cambios.is_active !== undefined) (est as any).is_active = cambios.is_active
+  
   await est.save()
   await est.refresh()
+  
   return est
 }
 

@@ -74,8 +74,7 @@ function extractCorrectLetter(b: any, totalOpc: number): string {
   return toLetter(rawCorrect, totalOpc)
 }
 
-/** Devuelve ["A. ...", "B. ...", ...] desde cualquiera de los formatos comunes */
-// 🔧 FIX 1: pelar prefijos ya rotulados ("A. ", "1) ", etc.) para evitar "A. A. ..."
+
 function stripLabel(s: any) {
   return String(s ?? '')
     .replace(/^\s*([A-F]|[1-6])[\.\)]\s*/i, '')
@@ -90,12 +89,10 @@ function fmtOpciones(opciones: any): string[] {
       if (s.startsWith('{') || s.startsWith('[')) opciones = JSON.parse(s)
     }
   } catch {
-    // si falla el parse, lo tratamos como string plano
   }
 
-  // array de objetos { key, text } o { letra, texto }
   if (Array.isArray(opciones)) {
-    // objetos
+    
     if (opciones.length && typeof opciones[0] === 'object' && opciones[0] !== null) {
       return opciones.map((it: any, i: number) => {
         const key =
@@ -105,11 +102,9 @@ function fmtOpciones(opciones: any): string[] {
         return `${key}. ${text}`
       })
     }
-    // array de strings
     return opciones.map((txt: any, i: number) => `${ABC[i] || 'A'}. ${stripLabel(txt)}`)
   }
 
-  // objeto { a: "...", b: "...", ... }
   if (opciones && typeof opciones === 'object') {
     const out: string[] = []
     for (let i = 0; i < ABC.length; i++) {
@@ -122,7 +117,7 @@ function fmtOpciones(opciones: any): string[] {
     if (out.length) return out
   }
 
-  // fallback
+  
   return []
 }
 
@@ -164,22 +159,23 @@ async function upsertProgresoNivel(opts: {
   }
 }
 
-/* ====================== Service ====================== */
 export default class SesionesService {
 
-  private canonAreaLabel(a: string) {
-    const t = String(a || '')
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .trim().toLowerCase();
 
-    if (t.startsWith('mate')) return 'Matemáticas';
-    if (t.startsWith('leng') || t.startsWith('lect')) return 'Lenguaje';
-    if (t.startsWith('cien')) return 'Ciencias Naturales';
-    if (t.startsWith('soci')) return 'Sociales';
-    if (t.startsWith('ing'))  return 'Inglés';
-    return a || 'Desconocida';
-  }
 
+
+  // Normaliza etiqueta para stats: fuerza "sociales" en minúscula
+private areaKeyForStats(a?: string | null) {
+  const t = String(a || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .trim().toLowerCase();
+  if (t.startsWith('mate')) return 'Matemáticas';
+  if (t.startsWith('leng') || t.startsWith('lect')) return 'Lenguaje';
+  if (t.startsWith('cien')) return 'Ciencias Naturales';
+  if (t.startsWith('soci')) return 'sociales';
+  if (t.startsWith('ing'))  return 'Inglés';
+  return 'Desconocida';
+}
 
   private normalizeText(text: string): string {
     return text.trim().toLowerCase();
@@ -205,6 +201,7 @@ export default class SesionesService {
     else if (slot.nivel_orden !== undefined) q.where('nivel_orden', slot.nivel_orden)
     return q
   }
+
 
   private async upStartOrReuse(p: {
     id_usuario: number
@@ -258,138 +255,367 @@ export default class SesionesService {
     await SesionDetalle.query().where('id_sesion', id_sesion).delete()
     let orden = 1
     for (const p of preguntas || []) {
+      const idPregunta = (p as any).id_pregunta
+      if (!Number.isFinite(Number(idPregunta))) continue
+      
       await SesionDetalle.create({
         id_sesion,
-        id_pregunta: Number((p as any).id_pregunta) || null,
+        id_pregunta: Number(idPregunta),
         orden,
-        tiempo_asignado_seg: (p as any).time_limit_seconds ?? null,
       } as any)
       orden++
     }
   }
 
-  /* ========= QUIZ INICIAL ========= */
-  async crearQuizInicial({ id_usuario }: { id_usuario: number; id_institucion?: number | null }) {
-    this.ensureDetalleTable()
-    await Sesion.query().where('id_usuario', id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+ /* ========= QUIZ INICIAL ========= */
+async crearQuizInicial({ id_usuario }: { id_usuario: number; id_institucion?: number | null }) {
+  // Cerramos solo las sesiones de quiz inicial (mantenemos las de práctica)
+  await Sesion.query()
+    .where('id_usuario', id_usuario)
+    .whereNull('fin_at')
+    .where('tipo', 'diagnostico')
+    .update({ fin_at: DateTime.now() })
 
-    const AREAS: Area[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'sociales', 'Ingles']
-    const pack: any[] = []
+  const AREAS: Area[] = ['Matematicas', 'Lenguaje', 'Ciencias', 'sociales', 'Ingles']
+  const pack: any[] = []
 
-    for (const area of AREAS) {
-      const lote = await this.ia.generarPreguntas({ area, cantidad: 5 } as any)
-      pack.push(...lote)
-    }
+  for (const area of AREAS) {
+    const lote = await this.ia.generarPreguntas({ area, cantidad: 5 } as any)
+    pack.push(...lote)
+  }
 
-    const sesion = await this.upStartOrReuse({
-      id_usuario,
-      area: 'Todas',
-      tipo: 'diagnostico',
-      nivel_orden: 0,
-      subtema: 'Todos',
-      total_preguntas: pack.length,
-      modo: 'estandar',
-      usa_estilo_kolb: false,
+  const sesion = await this.upStartOrReuse({
+    id_usuario,
+    area: 'Todas',
+    tipo: 'diagnostico',
+    nivel_orden: 0,
+    subtema: 'Todos',
+    total_preguntas: pack.length,
+    modo: 'estandar',
+    usa_estilo_kolb: false,
+  })
+
+  const id_sesion = Number((sesion as any).id_sesion)
+
+  // ⬇⬇⬇ FIX: insertar detalles SIN tiempo_asignado_seg
+  const detalles = pack.map((p: any, i: number) => ({
+    id_pregunta: Number(p.id_pregunta),
+    id_sesion,
+    orden: i + 1,
+  }))
+  if (detalles.length) {
+    await SesionDetalle.createMany(detalles as any)
+  }
+  // ⬆⬆⬆ FIN FIX
+
+  return {
+    id_sesion,
+    preguntas: pack.map((p: any) => ({
+      id_pregunta: p.id_pregunta,
+      area: p.area,
+      subtema: p.subtema,
+      enunciado: p.pregunta,
+      opciones: fmtOpciones(p.opciones),
+    })),
+  }
+}
+
+/* CIERRE */
+public async cerrarQuizInicial({
+  id_sesion,
+  respuestas,
+}: { id_sesion: number; respuestas: RespCierre[] }) {
+
+  await Sesion.findOrFail(id_sesion)
+
+  const detalles = await SesionDetalle.query()
+    .where('id_sesion', id_sesion)
+    .select(['id_pregunta'])
+  const ids = detalles.map((d: any) => Number(d.id_pregunta)).filter(Boolean)
+
+  if (!ids.length) {
+    await Sesion.query().where('id_sesion', id_sesion).update({
+      correctas: 0,
+      puntaje_porcentaje: 0,
+      fin_at: DateTime.now(),
     })
+    return { id_sesion, puntajes_por_area: {}, puntaje_general: 0, detalle: [] }
+  }
 
-    await this.upAttachPreguntas(Number((sesion as any).id_sesion), pack)
+  const banco = await BancoPregunta.query().whereIn('id_pregunta', ids)
 
-    const id_sesion = Number((sesion as any).id_sesion)
+  const correctaDe = new Map<number, string>()
+  const areaDe = new Map<number, string>()
+  const explicacionDe = new Map<number, string>()
+  const totalOpcDe = new Map<number, number>()
+  const porId = new Map<number, any>()
+
+  for (const b of banco as any[]) {
+    const idp = Number(b.id_pregunta)
+    const total = safeOpcCount((b as any).opciones, 4)
+    totalOpcDe.set(idp, total)
+    correctaDe.set(idp, extractCorrectLetter(b, total))
+    areaDe.set(idp, String((b as any).area))
+    if ((b as any).explicacion) explicacionDe.set(idp, String((b as any).explicacion))
+    porId.set(idp, b)
+  }
+
+  const normalizadas = (Array.isArray(respuestas) ? respuestas : [])
+    .map((r: any) => {
+      const idp = Number(r.id_pregunta ?? r.idPregunta ?? r.id ?? null)
+      const raw = String(r.respuesta ?? r.seleccion ?? r.opcion ?? r.alternativa ?? '').trim()
+      return { id_pregunta: idp, respuesta: raw }
+    })
+    .filter((x) => Number.isFinite(x.id_pregunta))
+
+  const porArea: Record<string, { total: number; ok: number }> = {}
+  for (const idp of ids) {
+    const aKey = this.areaKeyForStats(areaDe.get(idp))
+    porArea[aKey] = porArea[aKey] || { total: 0, ok: 0 }
+    porArea[aKey].total += 1
+  }
+
+  const detalle: Array<{
+    id_pregunta: number
+    area: string | null
+    correcta: string | null
+    marcada: string | null
+    es_correcta: boolean
+    explicacion?: string | null
+  }> = []
+
+  for (const r of normalizadas) {
+    const idp = Number(r.id_pregunta)
+    const totalOpc = totalOpcDe.get(idp) ?? 4
+    const marcada = toLetter(r.respuesta, totalOpc)
+    const correcta = correctaDe.get(idp) || null
+
+    const areaRaw = areaDe.get(idp) || 'Desconocida'
+    const areaKey = this.areaKeyForStats(areaRaw)
+    if (!porArea[areaKey]) porArea[areaKey] = { total: 0, ok: 0 }
+
+    const ok = !!(marcada && correcta && marcada === correcta)
+    if (ok) porArea[areaKey].ok += 1
+
+    detalle.push({
+      id_pregunta: idp,
+      area: areaRaw,
+      correcta,
+      marcada: marcada || null,
+      es_correcta: ok,
+      explicacion: explicacionDe.get(idp) ?? null,
+      // extras informativos
+      enunciado: String(porId.get(idp)?.pregunta ?? ''),
+      opciones: fmtOpciones(porId.get(idp)?.opciones),
+    } as any)
+  }
+
+  const puntajes: Record<string, number> = {}
+  let totalCorrectas = 0, totalPreguntas = 0
+
+  for (const [aKey, agg] of Object.entries(porArea)) {
+    const score = agg.total > 0 ? Math.round((agg.ok / agg.total) * 100) : 0
+    puntajes[aKey] = score
+    totalCorrectas += agg.ok
+    totalPreguntas += agg.total
+  }
+
+  const puntajeGeneral = totalPreguntas > 0 ? Math.round((totalCorrectas / totalPreguntas) * 100) : 0
+
+  // guarda marcado/corrección en detalles y cierra
+  await this.persistirCierreEnDetalle(id_sesion, detalle)
+
+  await Sesion.query().where('id_sesion', id_sesion).update({
+    correctas: totalCorrectas,
+    puntaje_porcentaje: puntajeGeneral,
+    fin_at: DateTime.now(),
+  })
+
+  return { id_sesion, puntajes_por_area: puntajes, puntaje_general: puntajeGeneral, detalle }
+}
+
+private async persistirCierreEnDetalle(
+  id_sesion: number,
+  detalle: Array<{ id_pregunta: number; es_correcta: boolean; marcada?: string | null }>
+) {
+  for (const d of detalle) {
+    const detalleRecord = await SesionDetalle.query()
+      .where('id_sesion', id_sesion)
+      .where('id_pregunta', d.id_pregunta)
+      .first()
+    
+    if (detalleRecord) {
+      console.log(`Actualizando detalle: sesion=${id_sesion}, pregunta=${d.id_pregunta}, es_correcta=${d.es_correcta}`)
+      detalleRecord.es_correcta = d.es_correcta
+      detalleRecord.alternativa_elegida = (d.marcada ?? '').trim().toUpperCase().slice(0, 1) || undefined
+      detalleRecord.respondida_at = DateTime.now()
+      await detalleRecord.save()
+      console.log(`Detalle guardado: es_correcta=${detalleRecord.es_correcta}`)
+    } else {
+      console.log(`NO se encontró registro para sesion=${id_sesion}, pregunta=${d.id_pregunta}`)
+    }
+  }
+}
+
+// ===================== /quizz/progreso (solo progreso) =====================
+public async ProgresoDiagnostico(
+  { id_usuario, id_sesion }: { id_usuario: number; id_sesion?: number }
+) {
+  // === Canon de salida fijo (coincide con tu UI) ===
+  const OUT_KEYS = ['Matemáticas','Lenguaje','Ciencias Naturales','sociales','Inglés'] as const;
+  type OutKey = typeof OUT_KEYS[number];
+
+  // Normaliza nombres de área a una de las 5 claves anteriores
+  const canonArea = (s: any): OutKey | null => {
+    const t = String(s || '')
+      .normalize('NFD').replace(/\p{Diacritic}/gu, '') // sin tildes
+      .trim().toLowerCase();
+
+    if (t.startsWith('mate')) return 'Matemáticas';
+    if (t.startsWith('leng') || t.startsWith('lect') || t.includes('comun')) return 'Lenguaje';
+    if (t.startsWith('cien')) return 'Ciencias Naturales'; 
+    if (t.startsWith('soci')) return 'sociales';           
+    if (t.startsWith('ingl') || t.includes('english')) return 'Inglés';
+    return null;
+  };
+
+  // Interpreta booleanos/enteros/cadenas para es_correcta
+  const isTrue = (v: any) => {
+    if (v === true) return true;
+    const s = String(v ?? '').trim().toLowerCase();
+    return s === '1' || s === 't' || s === 'true' || s === 'yes';
+  };
+
+  // 1) Resolver la sesión de diagnóstico (la indicada o la última cerrada)
+  let diag: any;
+  if (id_sesion) {
+    diag = await Sesion.query()
+      .where('id_sesion', id_sesion)
+      .where('id_usuario', id_usuario)
+      .where('tipo', 'diagnostico')
+      .first();
+  } else {
+    diag = await Sesion.query()
+      .where('id_usuario', id_usuario)
+      .where('tipo', 'diagnostico')
+      .whereNotNull('fin_at')
+      .orderBy('fin_at', 'desc')
+      .first();
+  }
+
+  // 2) Sin diagnóstico → estructura en ceros
+  const emptyOut = () => {
+    const progreso_por_area = Object.fromEntries(
+      OUT_KEYS.map(k => [k, { inicial: 0, actual: 0, delta: 0 }])
+    ) as Record<OutKey, { inicial: number; actual: number; delta: number }>;
     return {
-      id_sesion,
-      preguntas: pack.map((p: any) => ({
-        id_pregunta: p.id_pregunta,
-        area: p.area,
-        subtema: p.subtema,
-        enunciado: p.pregunta,
-        opciones: fmtOpciones(p.opciones),
-      })),
-    }
+      tiene_diagnostico: false,
+      progreso_por_area,
+      progreso_general: { inicial: 0, actual: 0, delta: 0 }
+    };
+  };
+
+  if (!diag) return emptyOut();
+
+  const idDiag  = Number(diag.id_sesion);
+  const finDiag = diag.fin_at;
+
+  // 3) INICIAL = lo que quedó guardado en sesiones_detalles de ESA sesión
+  const iniRows = await SesionDetalle.query()
+    .from('sesiones_detalles as sd')
+    .join('banco_preguntas as bp', 'bp.id_pregunta', 'sd.id_pregunta')
+    .where('sd.id_sesion', idDiag)
+    .select(['bp.area as area', 'sd.es_correcta as es_correcta'] as any);
+
+  console.log(`[ProgresoDiagnostico] idDiag=${idDiag}, iniRows count=${iniRows.length}`)
+  if (iniRows.length > 0) {
+    console.log(`[ProgresoDiagnostico] Primer registro:`, iniRows[0])
   }
 
-  /* ========= QUIZ INICIAL - CERRAR ========= */
-  async cerrarQuizInicial({ id_sesion, respuestas }: { id_sesion: number; respuestas: RespCierre[] }) {
-    this.ensureDetalleTable()
+  const iniAgg: Record<OutKey, { t: number; o: number }> = {
+    'Matemáticas': { t:0, o:0 },
+    'Lenguaje': { t:0, o:0 },
+    'Ciencias Naturales': { t:0, o:0 },
+    'sociales': { t:0, o:0 },
+    'Inglés': { t:0, o:0 },
+  };
 
-    await Sesion.findOrFail(id_sesion)
-
-    const detalles = await SesionDetalle.query().where('id_sesion', id_sesion).select(['id_pregunta'])
-    const ids = detalles.map((d: any) => Number(d.id_pregunta)).filter(Boolean)
-    if (!ids.length) return { id_sesion, puntajes_por_area: {}, puntaje_general: 0, detalle: [] }
-
-    const banco = await BancoPregunta.query().whereIn('id_pregunta', ids)
-    const correctaDe = new Map<number, string>()
-    const areaDe = new Map<number, string>()
-    const explicacionDe = new Map<number, string>()
-    const totalOpcDe = new Map<number, number>()
-
-    for (const b of banco as any[]) {
-      const idp = Number(b.id_pregunta)
-      const total = safeOpcCount((b as any).opciones, 4)
-      totalOpcDe.set(idp, total)
-      correctaDe.set(idp, extractCorrectLetter(b, total))
-      areaDe.set(idp, String((b as any).area))
-      if ((b as any).explicacion) explicacionDe.set(idp, String((b as any).explicacion))
-    }
-
-    const normalizadas = (Array.isArray(respuestas) ? respuestas : [])
-      .map((r: any) => {
-        const idp = Number(r.id_pregunta ?? r.idPregunta ?? r.id ?? null)
-        const raw = String(r.respuesta ?? r.seleccion ?? r.opcion ?? r.alternativa ?? '').trim()
-        return { id_pregunta: idp, respuesta: raw }
-      })
-      .filter((x) => Number.isFinite(x.id_pregunta))
-
-    const porArea: Record<string, { total: number; ok: number }> = {}
-    for (const idp of ids) {
-      const a = areaDe.get(idp) || 'Desconocida'
-      porArea[a] = porArea[a] || { total: 0, ok: 0 }
-      porArea[a].total += 1
-    }
-
-    const detalle: Array<{
-      id_pregunta: number
-      area: string | null
-      correcta: string | null
-      marcada: string | null
-      es_correcta: boolean
-      explicacion?: string | null
-    }> = []
-
-    for (const r of normalizadas) {
-      const idp = Number(r.id_pregunta)
-      const totalOpc = totalOpcDe.get(idp) ?? 4
-      const marcada = toLetter(r.respuesta, totalOpc)
-      const correcta = correctaDe.get(idp) || null
-      const area = areaDe.get(idp) || 'Desconocida'
-      if (!porArea[area]) porArea[area] = { total: 0, ok: 0 }
-
-      const ok = !!(marcada && correcta && marcada === correcta)
-      if (ok) porArea[area].ok += 1
-
-      detalle.push({
-        id_pregunta: idp,
-        area,
-        correcta,
-        marcada,
-        es_correcta: ok,
-        explicacion: explicacionDe.get(idp) ?? null,
-      })
-    }
-
-    const puntajes: Record<string, number> = {}
-    let totalCorrectas = 0,
-      totalPreguntas = 0
-    for (const [a, agg] of Object.entries(porArea)) {
-      const score = agg.total > 0 ? Math.round((agg.ok / agg.total) * 100) : 0
-      puntajes[a] = score
-      totalCorrectas += agg.ok
-      totalPreguntas += agg.total
-    }
-
-    const puntajeGeneral = totalPreguntas > 0 ? Math.round((totalCorrectas / totalPreguntas) * 100) : 0
-    return { id_sesion, puntajes_por_area: puntajes, puntaje_general: puntajeGeneral, detalle }
+  let iniT = 0, iniO = 0;
+  for (const r of iniRows as any[]) {
+    const areaValue = (r as any).$extras?.area || (r as any).area
+    const k = canonArea(areaValue);
+    console.log(`[ProgresoDiagnostico] Procesando: area=${areaValue}, canonArea=${k}, es_correcta=${r.es_correcta}, isTrue(${r.es_correcta})=${isTrue(r.es_correcta)}`)
+    if (!k) continue;
+    iniAgg[k].t++; iniT++;
+    if (isTrue(r.es_correcta)) { iniAgg[k].o++; iniO++; }
   }
+
+  const inicialPorArea = {} as Record<OutKey, number>;
+  for (const k of OUT_KEYS) {
+    const v = iniAgg[k];
+    inicialPorArea[k] = v.t ? Math.round((v.o * 100) / v.t) : 0;
+  }
+  const inicialGeneral = iniT ? Math.round((iniO * 100) / iniT) : 0;
+
+  // 4) ACTUAL = desempeño en TODO lo respondido DESPUÉS del diagnóstico
+  const postRows = await SesionDetalle.query()
+    .from('sesiones_detalles as sd')
+    .join('sesiones as s', 's.id_sesion', 'sd.id_sesion')
+    .join('banco_preguntas as bp', 'bp.id_pregunta', 'sd.id_pregunta')
+    .where('s.id_usuario', id_usuario)
+    .whereNotNull('s.fin_at')
+    .where('s.fin_at', '>', finDiag)
+    .select(['bp.area as area', 'sd.es_correcta as es_correcta'] as any);
+
+  const postAgg: Record<OutKey, { t: number; o: number }> = {
+    'Matemáticas': { t:0, o:0 },
+    'Lenguaje': { t:0, o:0 },
+    'Ciencias Naturales': { t:0, o:0 },
+    'sociales': { t:0, o:0 },
+    'Inglés': { t:0, o:0 },
+  };
+
+  let postT = 0, postO = 0;
+  for (const r of postRows as any[]) {
+    const areaValue = (r as any).$extras?.area || (r as any).area
+    const k = canonArea(areaValue);
+    if (!k) continue;
+    postAgg[k].t++; postT++;
+    if (isTrue(r.es_correcta)) { postAgg[k].o++; postO++; }
+  }
+
+  const actualPorArea = {} as Record<OutKey, number>;
+  if (!postT) {
+    // si no ha practicado después del diagnóstico: actual = inicial
+    for (const k of OUT_KEYS) actualPorArea[k] = inicialPorArea[k];
+  } else {
+    for (const k of OUT_KEYS) {
+      const v = postAgg[k];
+      actualPorArea[k] = v.t ? Math.round((v.o * 100) / v.t) : inicialPorArea[k];
+    }
+  }
+  const actualGeneral = postT ? Math.round((postO * 100) / postT) : inicialGeneral;
+
+  // 5) Salida
+  const progreso_por_area = Object.fromEntries(
+    OUT_KEYS.map(k => {
+      const ini = inicialPorArea[k] ?? 0;
+      const act = actualPorArea[k] ?? ini;
+      return [k, { inicial: ini, actual: act, delta: act - ini }];
+    })
+  ) as Record<OutKey, { inicial: number; actual: number; delta: number }>;
+
+  return {
+    tiene_diagnostico: true,
+    progreso_por_area,
+    progreso_general: {
+      inicial: inicialGeneral,
+      actual: actualGeneral,
+      delta: actualGeneral - inicialGeneral,
+    },
+  };
+}
+
 
   /* ========= PARADA ========= */
 
@@ -411,8 +637,7 @@ export default class SesionesService {
   // Validar que se haya proporcionado un área y un subtema
   if (!area || !subtema) throw new Error('area y subtema son obligatorios');
 
-  // Actualizar el estado de las sesiones previas
-  await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() });
+  // NO cerramos sesiones previas para permitir múltiples áreas activas
 
   // Evitar repetir preguntas de sesiones previas del mismo subtema
   const prev = await Sesion.query()
@@ -716,6 +941,9 @@ export default class SesionesService {
   const inicio = (ses as any).inicio_at ? DateTime.fromISO(String((ses as any).inicio_at)) : null
   const fin = (ses as any).fin_at ? DateTime.fromISO(String((ses as any).fin_at)) : null
   const duracionSegundos = inicio && fin ? Math.max(0, Math.round(fin.diff(inicio, 'seconds').seconds)) : 0
+  const horas = Math.floor(duracionSegundos / 3600)
+  const minutos = Math.floor((duracionSegundos % 3600) / 60)
+  const segundos = duracionSegundos % 60
 
   const aprueba = correctas >= 4
   const resultado = aprueba ? 'aprobado' : 'no_aprobado'
@@ -737,6 +965,7 @@ export default class SesionesService {
     finAt: (ses as any).fin_at,
     puntajePorcentaje: (ses as any).puntaje_porcentaje,
     duracionSegundos,
+    duracion: { horas, minutos, segundos },
     resultado,
     detalleResumen,
     createdAt: (ses as any).created_at ?? (ses as any).createdAt ?? null,
@@ -753,7 +982,7 @@ export default class SesionesService {
     const area = String(d.area ?? '').trim() as Area
     const TARGET = 25
 
-    await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+    // NO cerramos sesiones previas para permitir múltiples áreas activas
 
     const elegidas: any[] = []
     const ya = new Set<number>()
@@ -873,7 +1102,7 @@ export default class SesionesService {
       const mod = d.modalidad === 'dificil' ? 'dificil' : 'facil'
       const nivelOrden = mod === 'dificil' ? 8 : 7
 
-      await Sesion.query().where('id_usuario', d.id_usuario).whereNull('fin_at').update({ fin_at: DateTime.now() })
+      // NO cerramos sesiones previas para permitir múltiples áreas activas
 
       const ya = new Set<number>()
       const elegidas: any[] = []
@@ -948,13 +1177,19 @@ export default class SesionesService {
       return {
         sesion,
         totalPreguntas: elegidas.length,
-        preguntas: elegidas.map((p: any) => ({
-          id_pregunta: p.id_pregunta,
-          area: p.area,
-          subtema: p.subtema,
-          enunciado: p.pregunta,
-          opciones: fmtOpciones(p.opciones),
-        })),
+        preguntas: elegidas.map((p: any) => {
+          const base: any = {
+            id_pregunta: p.id_pregunta,
+            area: p.area,
+            subtema: p.subtema,
+            enunciado: p.pregunta,
+            opciones: fmtOpciones(p.opciones),
+          };
+          if (p.time_limit_seconds != null) {
+            base.time_limit_seconds = p.time_limit_seconds;
+          }
+          return base;
+        }),
       }
     }
 
@@ -1003,7 +1238,7 @@ export default class SesionesService {
         (Number.isFinite(ord) ? areaPorOrden.get(ord) : undefined) ??
         'Desconocida';
 
-      const area = this.canonAreaLabel(rawArea); // normaliza etiquetas
+      const area = this.areaKeyForStats(rawArea); // normaliza etiquetas
       if (!areasAgg[area]) areasAgg[area] = { total: 0, ok: 0 };
       areasAgg[area].total += 1;
       if (item.es_correcta === true) areasAgg[area].ok += 1;

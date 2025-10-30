@@ -79,7 +79,6 @@ class AuthController {
 
   // ==================== NUEVOS ENDPOINTS PARA MÓVIL (CON CÓDIGO) ====================
 
-  // 1️⃣ SOLICITAR CÓDIGO - Móvil espera: POST /estudiante/recuperar/solicitar
   public async solicitarCodigoEstudiante({ request, response }: HttpContext) {
     try {
       const correo = String(request.input('correo') || '').trim().toLowerCase()
