@@ -107,27 +107,27 @@ public async editarEstudiante({ request, response }: HttpContext) {
 
 
   public async eliminarEstudiante({ request, response }: HttpContext) {
-   const id = Number(request.param('id')); // Obtiene el ID del estudiante desde la URL
-  const { action } = request.qs();  // Obtener el parámetro de consulta 'action' (activar, inactivar, eliminar)
+    const id = Number(request.param('id'))
+    const { action } = request.qs() as any // opcional: 'activar' | 'inactivar' | 'eliminar'
 
-  try {
-    let data;
+    try {
+      // Si piden activar explícitamente
+      if (String(action).toLowerCase() === 'activar') {
+        const data = await estudiantesService.activarEstudiante(id)
+        return response.ok(data)
+      }
 
-    // Verificamos la acción
-    if (action === 'activar') {
-      data = await estudiantesService.activarEstudiante(id); // Activar al estudiante
-    } else if (action === 'inactivar') {
-      data = await estudiantesService.eliminarOInactivar(id); // Inactivar o eliminar dependiendo del historial
-    } else {
-      return response.status(400).send({ error: 'Acción no válida' }); // Si la acción no es válida
+      // Comportamiento por defecto para DELETE:
+      // si tiene historial → inactivar; si no tiene → eliminar
+      const data = await estudiantesService.eliminarOInactivar(id)
+      if ((data as any).estado === 'inactivado') {
+        return response.status(409).send({ error: 'Tiene historial; se inactivó en lugar de eliminar', ...data })
+      }
+      return response.ok(data)
+    } catch (e) {
+      return response.status(500).send({ error: 'Error al procesar la solicitud' })
     }
-
-    return response.ok(data); // Devuelve la respuesta con el estado de la acción
-
-  } catch (error) {
-    return response.status(500).send({ error: 'Error al procesar la solicitud' });
   }
-}
 
 
   // ===== Notificaciones =====

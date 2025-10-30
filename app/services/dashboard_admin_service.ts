@@ -263,7 +263,7 @@ async tarjetasPorArea(id_institucion: number) {
     fechaRef = new Date()
   ) {
     const ids = await this.idsEstudiantes(id_institucion)
-    if (!ids.length) return { items: [] as Array<{ id_usuario: number; nombre: string; curso: string; grado_curso?: string; telefono?: string|null; correo?: string|null; documento?: string; promedio: number; ultima_actividad: any; materia_critica?: { area: Area; subtema: string | null } }> }
+    if (!ids.length) return { items: [] as Array<{ id_usuario: number; nombre: string; curso: string; grado_curso?: string; telefono?: string|null; correo?: string|null; documento?: string; promedio: number; ultima_actividad: any; materia_critica?: { area: Area; subtema: string | null; porcentaje: number } }> }
 
     const { inicio, fin } = rangoMes(fechaRef)
     const ses = await this.baseSesionesPeriodo(ids, inicio, fin)
@@ -293,7 +293,7 @@ async tarjetasPorArea(id_institucion: number) {
       ])
     const userById = new Map<number, any>(usuarios.map(u => [Number((u as any).id_usuario), u]))
 
-    const items: Array<{ id_usuario: number; nombre: string; curso: string; grado_curso?: string; telefono?: string|null; correo?: string|null; documento?: string; promedio: number; ultima_actividad: any; materia_critica?: { area: Area; subtema: string | null } }> = []
+    const items: Array<{ id_usuario: number; nombre: string; curso: string; grado_curso?: string; telefono?: string|null; correo?: string|null; documento?: string; promedio: number; ultima_actividad: any; materia_critica?: { area: Area; subtema: string | null; porcentaje: number } }> = []
 
     for (const [uid, lista] of porUsuario.entries()) {
       const v = lista.filter(x => x.puntaje_porcentaje != null)
@@ -331,8 +331,12 @@ async tarjetasPorArea(id_institucion: number) {
           if (avg < peorProm) { peorProm = avg; peorArea = area }
         }
         let subtemaTop: string | null = null
+        let porcentajeDificultad = 0
         if (peorArea) {
-          const bajos = v.filter(x => mapArea((x as any).area) === peorArea && Number((x as any).puntaje_porcentaje || 0) < umbral)
+          const sesionesArea = v.filter(x => mapArea((x as any).area) === peorArea)
+          const bajos = sesionesArea.filter(x => Number((x as any).puntaje_porcentaje || 0) < umbral)
+          const totalArea = sesionesArea.length
+          porcentajeDificultad = totalArea > 0 ? Math.round((bajos.length * 100) / totalArea) : 0
           const cnt = new Map<string, number>()
           for (const s of bajos as any[]) {
             const st = String((s as any).subtema ?? '').trim()
@@ -341,7 +345,7 @@ async tarjetasPorArea(id_institucion: number) {
           }
           subtemaTop = Array.from(cnt.entries()).sort((a,b) => b[1]-a[1])[0]?.[0] ?? null
         }
-        const materia_critica = peorArea ? { area: peorArea, subtema: subtemaTop } : undefined
+        const materia_critica = peorArea ? { area: peorArea, subtema: subtemaTop, porcentaje: porcentajeDificultad } : undefined
         items.push({ id_usuario: uid, nombre, curso, grado_curso, telefono, correo, documento, promedio, ultima_actividad, materia_critica })
       }
     }
