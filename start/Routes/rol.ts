@@ -7,27 +7,6 @@ import AdminController    from '../../app/controller/admin_controller.js'
 import MovilController    from '../../app/controller/movil_controller.js'
 
 // PÚBLICAS
-
-// ====== ENDPOINTS DE DEBUG Y HEALTH CHECK ======
-Route.get('health', async ({ response }) => {
-  return response.ok({ 
-    status: 'ok', 
-    timestamp: new Date().toISOString(),
-    env: process.env.NODE_ENV,
-    redis: process.env.REDIS_URL ? 'configured' : 'not configured',
-    smtp: process.env.SMTP_HOST ? 'configured' : 'not configured'
-  })
-})
-
-Route.get('debug/rutas', async ({ response }) => {
-  const routes = Route.toJSON()
-  return response.ok({ 
-    total: routes.length,
-    rutas_recovery: routes.filter((r: any) => r.pattern?.includes('recovery')),
-    todas: routes.map((r: any) => ({ method: r.methods, pattern: r.pattern }))
-  })
-})
-
 Route.post('instituciones/registro', (ctx) => new RegistroController().registrarInstitucion(ctx))
 Route.post('admin/login', (ctx) => new AuthController().loginAdministrador(ctx))
 Route.post('estudiante/login', (ctx) => new AuthController().loginEstudiante(ctx))
