@@ -25,9 +25,8 @@ ENV HOST=0.0.0.0
 COPY --from=deps  /app/node_modules ./node_modules
 COPY --from=build /app/build        ./build
 
-# IMPORTANTE: Docker Compose usa .env.production vía env_file
-# pero lo copiamos también al build para fallback
-COPY --from=build /app/.env.production ./build/.env 2>/dev/null || echo "No .env.production found"
+# IMPORTANTE: Docker Compose carga .env.production vía env_file
+# No es necesario copiarlo manualmente al contenedor
 
 EXPOSE 3333
 # OJO: Adonis arranca aquí
