@@ -55,8 +55,28 @@ class AuthController {
 
   // EP-02: Recuperación ADMIN
   public async enviarRecoveryAdmin({ request, response }: HttpContext) {
-    const ok = await recuperacionService.enviarCodigoAdmin(String(request.input('correo') || ''))
-    return ok ? response.ok({ ok: true }) : response.notFound({ error: 'Correo no registrado' })
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      console.log(`[Recovery Admin] 🔵 Solicitud recibida para: ${correo}`)
+      
+      if (!correo) {
+        console.log('[Recovery Admin] ❌ Correo vacío')
+        return response.badRequest({ error: 'El correo es obligatorio' })
+      }
+
+      const ok = await recuperacionService.enviarCodigoAdmin(correo)
+      
+      if (ok) {
+        console.log(`[Recovery Admin] ✅ Email enviado exitosamente para: ${correo}`)
+        return response.ok({ ok: true, message: 'Email enviado correctamente' })
+      } else {
+        console.log(`[Recovery Admin] ⚠️ Correo no encontrado: ${correo}`)
+        return response.notFound({ error: 'Correo no registrado' })
+      }
+    } catch (error: any) {
+      console.error('[Recovery Admin] 🔴 Error inesperado:', error.message || error)
+      return response.internalServerError({ error: 'Error interno del servidor' })
+    }
   }
   public async restablecerAdmin({ request, response }: HttpContext) {
     const token = String(request.input('token') || '')

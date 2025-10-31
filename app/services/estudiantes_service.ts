@@ -20,6 +20,24 @@ const clean = (v: any) => {
 const up = (v: any) => (clean(v)?.toUpperCase() ?? null)
 const low = (v: any) => (clean(v)?.toLowerCase() ?? null)
 
+// Normaliza nombres de columnas: quita acentos, pasa a lower y reemplaza
+// espacios, guiones, puntos o slashes por guion_bajo. Colapsa múltiples _.
+function normalizeKeyName(key: string): string {
+  const base = String(key).trim().toLowerCase()
+  const sinAcentos = base.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return sinAcentos
+    .replace(/[\s\-\./]+/g, '_')
+    .replace(/__+/g, '_')
+}
+
+function normalizeKeysRecord<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const out: Record<string, any> = {}
+  for (const k of Object.keys(obj || {})) {
+    out[normalizeKeyName(k)] = (obj as any)[k]
+  }
+  return out
+}
+
 function normGrado(g: any): string | null {
   const s = low(g)
   if (!s) return null
@@ -152,14 +170,30 @@ export default class EstudiantesService {
       const auth = (request as any).authUsuario
       const id_institucion = Number(auth.id_institucion)
 
-      const file =
-        request.file('file', { size: '20mb' }) ??
-        request.file('archivo', { size: '20mb' }) ??
-        request.file('estudiantes', { size: '20mb' })
+      // Buscar archivo en campos comunes (case-insensitive) y fallback al primer archivo cargado
+      const variants = [
+        'file', 'archivo', 'estudiantes',
+        'File', 'Archivo', 'Estudiantes',
+        'FILE', 'ARCHIVO', 'ESTUDIANTES'
+      ]
+      let file = null as any
+      for (const v of variants) {
+        file = request.file(v as any, { size: '20mb' })
+        if (file) break
+      }
+      if (!file) {
+        try {
+          const anyFiles =
+            ((request as any).allFiles?.() || (request as any).files?.() || []) as any[]
+          if (Array.isArray(anyFiles) && anyFiles.length) {
+            file = anyFiles.find((f) => f && (f.tmpPath || f.isValid != null)) || anyFiles[0]
+          }
+        } catch {}
+      }
 
       if (!file) {
         return response.badRequest({
-          error: 'Sube un CSV/XLSX en el campo "file" (o "archivo" o "estudiantes")',
+          error: 'Sube un CSV/XLSX como archivo (form-data). Usa el campo file/archivo/estudiantes.',
         })
       }
       if (!file.isValid) {
@@ -212,10 +246,10 @@ export default class EstudiantesService {
         return response.badRequest({ error: 'Archivo vacío o ilegible (CSV/XLSX)' })
       }
 
-      // normalizar keys → lower
+      // Normalizar keys → lower y variantes (espacios/guiones → _)
       rows = rows.map((obj: any) => {
         const out: any = {}
-        for (const k of Object.keys(obj)) out[String(k).trim().toLowerCase()] = obj[k]
+        for (const k of Object.keys(obj)) out[normalizeKeyName(k)] = obj[k]
         return out
       })
 
@@ -231,27 +265,31 @@ export default class EstudiantesService {
       }
 
       // construir candidatos
-      const vistos = new Set<string>()
+      const vistos = new Set<string>() // clave: TIPO|NUMERO (para detectar duplicados dentro del archivo)
       let duplicados_en_archivo = 0
       const candidatos: any[] = []
 
       for (const r of rows) {
         const numero_documento = mapVal(r, 'numero_documento', 'documento')
         if (!numero_documento) continue
+        const tipo_doc_norm = mapVal(r, 'tipo_documento', 'tipo').toUpperCase()
+        const keyVisto = `${tipo_doc_norm}|${numero_documento}`
 
-        if (vistos.has(numero_documento)) {
+        if (vistos.has(keyVisto)) {
           duplicados_en_archivo++
           continue
         }
-        vistos.add(numero_documento)
+        vistos.add(keyVisto)
 
+        const correoNorm = normEmail(mapVal(r, 'correo', 'email'))
+        const correoFinal = correoNorm || (numero_documento ? `${numero_documento}@noemail.local` : null)
         candidatos.push({
           id_institucion,
-          tipo_documento: mapVal(r, 'tipo_documento', 'tipo').toUpperCase(),
+          tipo_documento: tipo_doc_norm,
           numero_documento,
           nombre: mapVal(r, 'nombre', 'nombres', 'nombre_usuario'),
           apellido: mapVal(r, 'apellido', 'apellidos'),
-          correo: normEmail(mapVal(r, 'correo', 'email')),
+          correo: correoFinal,
           direccion: clean(mapVal(r, 'direccion')),
           telefono: clean(mapVal(r, 'telefono', 'tel')),
           grado: normGrado(mapVal(r, 'grado')),
@@ -273,11 +311,17 @@ export default class EstudiantesService {
       const documentos = candidatos.map((c) => c.numero_documento)
       const existentesRows = await Usuario.query()
         .whereIn('numero_documento', documentos)
-        .select(['id_usuario', 'numero_documento', 'id_institucion'])
+        .select(['id_usuario', 'numero_documento', 'tipo_documento', 'id_institucion'])
 
       const existePorDoc = new Map<string, { id_usuario: number; id_institucion: number }>()
+      const existePorNumero = new Map<string, { id_usuario: number; id_institucion: number }>()
       for (const r of existentesRows) {
-        existePorDoc.set(String((r as any).numero_documento), {
+        const k = `${String((r as any).tipo_documento || '').toUpperCase()}|${String((r as any).numero_documento)}`
+        existePorDoc.set(k, {
+          id_usuario: (r as any).id_usuario,
+          id_institucion: (r as any).id_institucion,
+        })
+        existePorNumero.set(String((r as any).numero_documento), {
           id_usuario: (r as any).id_usuario,
           id_institucion: (r as any).id_institucion,
         })
@@ -288,9 +332,14 @@ export default class EstudiantesService {
       const conflictosOtraInst: any[] = []
 
       for (const c of candidatos) {
-        const ex = existePorDoc.get(c.numero_documento)
-        if (!ex) aInsertar.push(c)
-        else if (ex.id_institucion === id_institucion) aActualizar.push(c)
+        const k = `${String(c.tipo_documento || '').toUpperCase()}|${c.numero_documento}`
+        const ex = existePorDoc.get(k)
+        if (!ex) {
+          const exNum = existePorNumero.get(String(c.numero_documento))
+          if (exNum && exNum.id_institucion === id_institucion) aActualizar.push({ ...c, _updateByNumero: true })
+          else if (exNum) conflictosOtraInst.push({ ...c, id_institucion_existente: exNum.id_institucion })
+          else aInsertar.push(c)
+        } else if (ex.id_institucion === id_institucion) aActualizar.push(c)
         else conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
       }
 
@@ -299,6 +348,16 @@ export default class EstudiantesService {
       for (const e of aInsertar) {
         const plano = this.claveInicial(e.numero_documento, e.apellido)
         const hash = await bcrypt.hash(plano, 10)
+        // asegurar unicidad de correo por institución
+        let correoSeguro = e.correo || `${e.numero_documento}@noemail.local`
+        try {
+          const yaCorreo = await Usuario.query()
+            .where('id_institucion', e.id_institucion)
+            .where('correo', correoSeguro)
+            .first()
+          if (yaCorreo) correoSeguro = `${e.numero_documento}@noemail.local`
+        } catch {}
+
         const u = await Usuario.create({
           id_institucion: e.id_institucion,
           rol: 'estudiante',
@@ -306,7 +365,7 @@ export default class EstudiantesService {
           numero_documento: e.numero_documento,
           nombre: e.nombre,
           apellido: e.apellido,
-          correo: e.correo,
+          correo: correoSeguro,
           direccion: e.direccion,
           telefono: e.telefono,
           grado: e.grado,
@@ -321,7 +380,8 @@ export default class EstudiantesService {
       // actualizar (misma institución; no toca password)
       let actualizados = 0
       for (const e of aActualizar) {
-        const ex = existePorDoc.get(e.numero_documento)!
+        const k = `${String(e.tipo_documento || '').toUpperCase()}|${e.numero_documento}`
+        const ex = existePorDoc.get(k) || existePorNumero.get(String(e.numero_documento))!
         const u = await Usuario.findOrFail(ex.id_usuario)
         let camb = 0
         const set = (k: keyof any, val: any) => {
@@ -330,7 +390,18 @@ export default class EstudiantesService {
         set('tipo_documento', up(e.tipo_documento))
         set('nombre', clean(e.nombre))
         set('apellido', clean(e.apellido))
-        set('correo', normEmail(e.correo))
+        // correo: intentar actualizar solo si no genera conflicto de unicidad
+        {
+          const nuevo = normEmail(e.correo)
+          if (nuevo && nuevo !== (u as any).correo) {
+            const existeCorreo = await Usuario.query()
+              .where('id_institucion', (u as any).id_institucion)
+              .where('correo', nuevo)
+              .whereNot('id_usuario', (u as any).id_usuario)
+              .first()
+            if (!existeCorreo) set('correo', nuevo)
+          }
+        }
         set('direccion', clean(e.direccion))
         set('telefono', clean(e.telefono))
         set('grado', normGrado(e.grado))
@@ -366,29 +437,33 @@ export default class EstudiantesService {
 
   /** ===== Importación por JSON plano: { filas: [...] } ===== */
   async importarMasivo(id_institucion: number, filas: any[]) {
-    const vistos = new Set<string>()
+    const vistos = new Set<string>() // TIPO|NUMERO para duplicados dentro de JSON
     const candidatos = (Array.isArray(filas) ? filas : []).map((r) => {
-      const numero_documento = clean(r.numero_documento ?? r.documento)
-      const tipo_documento = up(r.tipo_documento ?? r.tipo)
-      const nombre = clean(r.nombre ?? r.nombres)
-      const apellido = clean(r.apellido ?? r.apellidos)
+      const row = normalizeKeysRecord(r)
+      const numero_documento = clean(row.numero_documento ?? row.documento)
+      const tipo_documento = up(row.tipo_documento ?? row.tipo)
+      const nombre = clean(row.nombre ?? row.nombres ?? row.nombre_usuario)
+      const apellido = clean(row.apellido ?? row.apellidos)
+      const correoNorm = normEmail(row.correo ?? row.email)
+      const correoFinal = correoNorm || (numero_documento ? `${numero_documento}@noemail.local` : null)
       return {
         id_institucion,
         tipo_documento,
         numero_documento,
         nombre,
         apellido,
-        correo: normEmail(r.correo),
-        direccion: clean(r.direccion),
-        telefono: clean(r.telefono),
-        grado: normGrado(r.grado),
-        curso: normCurso(r.curso),
-        jornada: normJornada(r.jornada),
+        correo: correoFinal,
+        direccion: clean(row.direccion),
+        telefono: clean(row.telefono ?? row.tel),
+        grado: normGrado(row.grado),
+        curso: normCurso(row.curso),
+        jornada: normJornada(row.jornada),
       }
     }).filter((c) => {
       if (!c.numero_documento) return false
-      if (vistos.has(c.numero_documento)) return false
-      vistos.add(c.numero_documento)
+      const key = `${String(c.tipo_documento || '').toUpperCase()}|${c.numero_documento}`
+      if (vistos.has(key)) return false
+      vistos.add(key)
       return true
     })
 
@@ -396,11 +471,17 @@ export default class EstudiantesService {
     const existentesRows = await Usuario
       .query()
       .whereIn('numero_documento', candidatos.map((c) => c.numero_documento as string))
-      .select(['id_usuario', 'numero_documento', 'id_institucion'])
+      .select(['id_usuario', 'numero_documento', 'tipo_documento', 'id_institucion'])
 
     const existePorDoc = new Map<string, { id_usuario: number; id_institucion: number }>()
+    const existePorNumero = new Map<string, { id_usuario: number; id_institucion: number }>()
     for (const r of existentesRows) {
-      existePorDoc.set(String((r as any).numero_documento), {
+      const k = `${String((r as any).tipo_documento || '').toUpperCase()}|${String((r as any).numero_documento)}`
+      existePorDoc.set(k, {
+        id_usuario: (r as any).id_usuario,
+        id_institucion: (r as any).id_institucion,
+      })
+      existePorNumero.set(String((r as any).numero_documento), {
         id_usuario: (r as any).id_usuario,
         id_institucion: (r as any).id_institucion,
       })
@@ -411,9 +492,14 @@ export default class EstudiantesService {
     const conflictosOtraInst: any[] = []
 
     for (const c of candidatos) {
-      const ex = existePorDoc.get(c.numero_documento!)
-      if (!ex) aInsertar.push(c)
-      else if (ex.id_institucion === id_institucion) aActualizar.push(c)
+      const k = `${String(c.tipo_documento || '').toUpperCase()}|${c.numero_documento}`
+      const ex = existePorDoc.get(k)
+      if (!ex) {
+        const exNum = existePorNumero.get(String(c.numero_documento))
+        if (exNum && exNum.id_institucion === id_institucion) aActualizar.push({ ...c, _updateByNumero: true })
+        else if (exNum) conflictosOtraInst.push({ ...c, id_institucion_existente: exNum.id_institucion })
+        else aInsertar.push(c)
+      } else if (ex.id_institucion === id_institucion) aActualizar.push(c)
       else conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
     }
 
@@ -427,7 +513,8 @@ export default class EstudiantesService {
 
     let actualizados = 0
     for (const e of aActualizar) {
-      const ex = existePorDoc.get(e.numero_documento)!
+      const k = `${String(e.tipo_documento || '').toUpperCase()}|${e.numero_documento}`
+      const ex = existePorDoc.get(k) || existePorNumero.get(String(e.numero_documento))!
       const u = await Usuario.findOrFail(ex.id_usuario)
       let camb = 0
       const set = (k: keyof any, val: any) => {
