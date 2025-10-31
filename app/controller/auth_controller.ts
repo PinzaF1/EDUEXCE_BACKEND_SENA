@@ -53,7 +53,8 @@ class AuthController {
 }
 
 
-  // EP-02: Recuperación ADMIN
+  // ==================== RECUPERACIÓN ADMIN - MÉTODO CON LINK (LEGACY) ====================
+  
   public async enviarRecoveryAdmin({ request, response }: HttpContext) {
     try {
       const correo = String(request.input('correo') || '').trim().toLowerCase()
@@ -78,11 +79,84 @@ class AuthController {
       return response.internalServerError({ error: 'Error interno del servidor' })
     }
   }
+  
   public async restablecerAdmin({ request, response }: HttpContext) {
     const token = String(request.input('token') || '')
     const nueva = String(request.input('nueva') || '')
     const ok = await recuperacionService.restablecerAdmin(token, nueva)
     return ok ? response.ok({ ok: true }) : response.badRequest({ error: 'Token inválido' })
+  }
+
+  // ==================== RECUPERACIÓN ADMIN - MÉTODO CON CÓDIGO (NUEVO) ====================
+
+  public async solicitarCodigoAdmin({ request, response }: HttpContext) {
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      
+      if (!correo) {
+        return response.badRequest({ error: 'El correo es obligatorio' })
+      }
+
+      const result = await recuperacionService.solicitarCodigoAdminPorCorreo(correo)
+      
+      if (result && (result as any).success) {
+        return response.ok({ 
+          success: true, 
+          message: 'Código enviado por email'
+        })
+      }
+      
+      return response.notFound({ error: 'Correo no registrado' })
+    } catch (e: any) {
+      return response.badRequest({ error: e.message || 'Error al solicitar código' })
+    }
+  }
+
+  public async verificarCodigoAdmin({ request, response }: HttpContext) {
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      const codigo = String(request.input('codigo') || '').trim()
+      
+      if (!correo || !codigo) {
+        return response.badRequest({ error: 'Correo y código son obligatorios' })
+      }
+
+      const valid = await recuperacionService.verificarCodigoAdmin(correo, codigo)
+      
+      if (valid) {
+        return response.ok({ valid: true, message: 'Código válido' })
+      }
+      
+      return response.ok({ valid: false, message: 'Código inválido o expirado' })
+    } catch (e: any) {
+      return response.badRequest({ error: e.message || 'Error al verificar código' })
+    }
+  }
+
+  public async restablecerPasswordAdmin({ request, response }: HttpContext) {
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      const codigo = String(request.input('codigo') || '').trim()
+      const nueva = String(request.input('nueva_password') || '')
+      
+      if (!correo || !codigo || !nueva) {
+        return response.badRequest({ error: 'Todos los campos son obligatorios' })
+      }
+
+      if (nueva.length < 6) {
+        return response.badRequest({ error: 'La contraseña debe tener mínimo 6 caracteres' })
+      }
+
+      const ok = await recuperacionService.restablecerPasswordAdminConCodigo(correo, codigo, nueva)
+      
+      if (ok) {
+        return response.ok({ success: true, message: 'Contraseña restablecida exitosamente' })
+      }
+      
+      return response.badRequest({ error: 'Código inválido, expirado o ya utilizado' })
+    } catch (e: any) {
+      return response.badRequest({ error: e.message || 'Error al restablecer contraseña' })
+    }
   }
 
   // EP-09 (móvil): Recuperación ESTUDIANTE

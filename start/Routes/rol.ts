@@ -10,8 +10,17 @@ import MovilController    from '../../app/controller/movil_controller.js'
 Route.post('instituciones/registro', (ctx) => new RegistroController().registrarInstitucion(ctx))
 Route.post('admin/login', (ctx) => new AuthController().loginAdministrador(ctx))
 Route.post('estudiante/login', (ctx) => new AuthController().loginEstudiante(ctx))
+
+// RECUPERACIÓN ADMIN - Método con LINK (legacy)
 Route.post('auth/recovery/admin/enviar', (ctx) => new AuthController().enviarRecoveryAdmin(ctx))
 Route.post('auth/recovery/admin/restablecer', (ctx) => new AuthController().restablecerAdmin(ctx))
+
+// RECUPERACIÓN ADMIN - Método con CÓDIGO (nuevo - más fácil)
+Route.post('auth/recovery/admin/solicitar', (ctx) => new AuthController().solicitarCodigoAdmin(ctx))
+Route.post('auth/recovery/admin/verificar', (ctx) => new AuthController().verificarCodigoAdmin(ctx))
+Route.post('auth/recovery/admin/restablecer-codigo', (ctx) => new AuthController().restablecerPasswordAdmin(ctx))
+
+// RECUPERACIÓN ESTUDIANTE - Método con LINK (web legacy)
 Route.post('auth/recovery/estudiante/enviar', (ctx) => new AuthController().enviarRecoveryEstudiante(ctx))
 Route.post('auth/recovery/estudiante/restablecer', (ctx) => new AuthController().restablecerEstudiante(ctx))
 
