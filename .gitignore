@@ -6,8 +6,26 @@ tmp
 # Secrets
 .env
 .env.local
+.env.production
 .env.production.local
 .env.development.local
+
+# Archivos con credenciales reales (no subir)
+CREDENCIALES_*.txt
+*_REALES.*
+test-smtp-verificado.cjs
+env.txt
+
+# Archivos temporales de testing
+test-recovery-flow.*
+test-*.ps1
+test-*.sh
+
+# Archivos temporales de documentación
+*_URGENTE.md
+*_FINAL*.md
+VEREDICTO*.md
+MEJORAS*.md
 
 # Frontend assets compiled code
 public/assets

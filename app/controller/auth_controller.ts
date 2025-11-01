@@ -53,16 +53,110 @@ class AuthController {
 }
 
 
-  // EP-02: Recuperación ADMIN
+  // ==================== RECUPERACIÓN ADMIN - MÉTODO CON LINK (LEGACY) ====================
+  
   public async enviarRecoveryAdmin({ request, response }: HttpContext) {
-    const ok = await recuperacionService.enviarCodigoAdmin(String(request.input('correo') || ''))
-    return ok ? response.ok({ ok: true }) : response.notFound({ error: 'Correo no registrado' })
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      console.log(`[Recovery Admin] 🔵 Solicitud recibida para: ${correo}`)
+      
+      if (!correo) {
+        console.log('[Recovery Admin] ❌ Correo vacío')
+        return response.badRequest({ error: 'El correo es obligatorio' })
+      }
+
+      const ok = await recuperacionService.enviarCodigoAdmin(correo)
+      
+      if (ok) {
+        console.log(`[Recovery Admin] ✅ Email enviado exitosamente para: ${correo}`)
+        return response.ok({ ok: true, message: 'Email enviado correctamente' })
+      } else {
+        console.log(`[Recovery Admin] ⚠️ Correo no encontrado: ${correo}`)
+        return response.notFound({ error: 'Correo no registrado' })
+      }
+    } catch (error: any) {
+      console.error('[Recovery Admin] 🔴 Error inesperado:', error.message || error)
+      return response.internalServerError({ error: 'Error interno del servidor' })
+    }
   }
+  
   public async restablecerAdmin({ request, response }: HttpContext) {
     const token = String(request.input('token') || '')
     const nueva = String(request.input('nueva') || '')
     const ok = await recuperacionService.restablecerAdmin(token, nueva)
     return ok ? response.ok({ ok: true }) : response.badRequest({ error: 'Token inválido' })
+  }
+
+  // ==================== RECUPERACIÓN ADMIN - MÉTODO CON CÓDIGO (NUEVO) ====================
+
+  public async solicitarCodigoAdmin({ request, response }: HttpContext) {
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      
+      if (!correo) {
+        return response.badRequest({ error: 'El correo es obligatorio' })
+      }
+
+      const result = await recuperacionService.solicitarCodigoAdminPorCorreo(correo)
+      
+      if (result && (result as any).success) {
+        return response.ok({ 
+          success: true, 
+          message: 'Código enviado por email'
+        })
+      }
+      
+      return response.notFound({ error: 'Correo no registrado' })
+    } catch (e: any) {
+      return response.badRequest({ error: e.message || 'Error al solicitar código' })
+    }
+  }
+
+  public async verificarCodigoAdmin({ request, response }: HttpContext) {
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      const codigo = String(request.input('codigo') || '').trim()
+      
+      if (!correo || !codigo) {
+        return response.badRequest({ error: 'Correo y código son obligatorios' })
+      }
+
+      const valid = await recuperacionService.verificarCodigoAdmin(correo, codigo)
+      
+      if (valid) {
+        return response.ok({ valid: true, message: 'Código válido' })
+      }
+      
+      return response.ok({ valid: false, message: 'Código inválido o expirado' })
+    } catch (e: any) {
+      return response.badRequest({ error: e.message || 'Error al verificar código' })
+    }
+  }
+
+  public async restablecerPasswordAdmin({ request, response }: HttpContext) {
+    try {
+      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      const codigo = String(request.input('codigo') || '').trim()
+      const nueva = String(request.input('nueva_password') || '')
+      
+      if (!correo || !codigo || !nueva) {
+        return response.badRequest({ error: 'Todos los campos son obligatorios' })
+      }
+
+      if (nueva.length < 6) {
+        return response.badRequest({ error: 'La contraseña debe tener mínimo 6 caracteres' })
+      }
+
+      const ok = await recuperacionService.restablecerPasswordAdminConCodigo(correo, codigo, nueva)
+      
+      if (ok) {
+        return response.ok({ success: true, message: 'Contraseña restablecida exitosamente' })
+      }
+      
+      return response.badRequest({ error: 'Código inválido, expirado o ya utilizado' })
+    } catch (e: any) {
+      return response.badRequest({ error: e.message || 'Error al restablecer contraseña' })
+    }
   }
 
   // EP-09 (móvil): Recuperación ESTUDIANTE
@@ -81,15 +175,19 @@ class AuthController {
 
   public async solicitarCodigoEstudiante({ request, response }: HttpContext) {
     try {
-      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      // Acepta tanto "correo" como "email" (compatibilidad con móvil)
+      const correo = String(request.input('correo') || request.input('email') || '').trim().toLowerCase()
       
       if (!correo) {
         return response.badRequest({ error: 'El correo es obligatorio' })
       }
 
+      console.log(`[Recuperación Estudiante] 🔵 Solicitud recibida para: ${correo}`)
+
       const result = await recuperacionService.solicitarCodigoEstudiantePorCorreo(correo)
       
       if (result && (result as any).success) {
+        console.log(`[Recuperación Estudiante] ✅ Código generado exitosamente para: ${correo}`)
         return response.ok({ 
           success: true, 
           message: 'Código enviado por email',
@@ -97,8 +195,10 @@ class AuthController {
         })
       }
       
+      console.log(`[Recuperación Estudiante] ⚠️ Correo no encontrado: ${correo}`)
       return response.notFound({ error: 'Correo no registrado' })
     } catch (e: any) {
+      console.error(`[Recuperación Estudiante] ❌ Error:`, e.message || e)
       return response.badRequest({ error: e.message || 'Error al solicitar código' })
     }
   }
@@ -106,21 +206,27 @@ class AuthController {
   // 2️⃣ VERIFICAR CÓDIGO - Móvil espera: POST /estudiante/recuperar/verificar
   public async verificarCodigoEstudiante({ request, response }: HttpContext) {
     try {
-      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      // Acepta tanto "correo" como "email" (compatibilidad con móvil)
+      const correo = String(request.input('correo') || request.input('email') || '').trim().toLowerCase()
       const codigo = String(request.input('codigo') || '').trim()
       
       if (!correo || !codigo) {
         return response.badRequest({ error: 'Correo y código son obligatorios' })
       }
 
+      console.log(`[Recuperación Estudiante] 🔍 Verificando código para: ${correo}`)
+
       const valid = await recuperacionService.verificarCodigoEstudiante(correo, codigo)
       
       if (valid) {
+        console.log(`[Recuperación Estudiante] ✅ Código válido para: ${correo}`)
         return response.ok({ valid: true, message: 'Código válido' })
       }
       
+      console.log(`[Recuperación Estudiante] ❌ Código inválido para: ${correo}`)
       return response.ok({ valid: false, message: 'Código inválido o expirado' })
     } catch (e: any) {
+      console.error(`[Recuperación Estudiante] ❌ Error al verificar:`, e.message || e)
       return response.badRequest({ error: e.message || 'Error al verificar código' })
     }
   }
@@ -128,9 +234,10 @@ class AuthController {
   // 3️⃣ RESTABLECER CONTRASEÑA - Móvil espera: POST /estudiante/recuperar/restablecer
   public async restablecerPasswordEstudiante({ request, response }: HttpContext) {
     try {
-      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      // Acepta tanto "correo" como "email" (compatibilidad con móvil)
+      const correo = String(request.input('correo') || request.input('email') || '').trim().toLowerCase()
       const codigo = String(request.input('codigo') || '').trim()
-      const nueva = String(request.input('nueva_password') || '')
+      const nueva = String(request.input('nueva_password') || request.input('password') || '')
       
       if (!correo || !codigo || !nueva) {
         return response.badRequest({ error: 'Todos los campos son obligatorios' })
@@ -140,14 +247,19 @@ class AuthController {
         return response.badRequest({ error: 'La contraseña debe tener mínimo 6 caracteres' })
       }
 
+      console.log(`[Recuperación Estudiante] 🔄 Restableciendo contraseña para: ${correo}`)
+
       const ok = await recuperacionService.restablecerPasswordConCodigo(correo, codigo, nueva)
       
       if (ok) {
+        console.log(`[Recuperación Estudiante] ✅ Contraseña restablecida para: ${correo}`)
         return response.ok({ success: true, message: 'Contraseña restablecida exitosamente' })
       }
       
+      console.log(`[Recuperación Estudiante] ❌ No se pudo restablecer para: ${correo}`)
       return response.badRequest({ error: 'Código inválido, expirado o ya utilizado' })
     } catch (e: any) {
+      console.error(`[Recuperación Estudiante] ❌ Error al restablecer:`, e.message || e)
       return response.badRequest({ error: e.message || 'Error al restablecer contraseña' })
     }
   }

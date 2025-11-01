@@ -56,7 +56,9 @@ function mailer() {
 }
 
 export default class RecuperacionService {
-  // ADMIN: enviar correo con link/tocken
+  // ==================== ADMIN - MÉTODO CON LINK (LEGACY) ====================
+  
+  // ADMIN: enviar correo con link/token
   async enviarCodigoAdmin(correo: string) {
     const inst = await Institucion.findBy('correo', correo.trim().toLowerCase())
     if (!inst) return false
@@ -68,14 +70,21 @@ export default class RecuperacionService {
     )
 
     const url = `${process.env.FRONT_URL ?? 'http://localhost:5173'}/restablecer?token=${token}`
-    await mailer().sendMail({
-      from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
-      to: correo,
-      subject: 'Recuperación de acceso (Administrador)',
-      text: `Recupera tu acceso aquí: ${url} (válido por 15 min)`,
-      html: `Recupera tu acceso aquí: <a href="${url}">${url}</a> (válido por 15 min)`,
-    })
-    return true
+    
+    try {
+      await mailer().sendMail({
+        from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
+        to: correo,
+        subject: 'Recuperación de acceso (Administrador)',
+        text: `Recupera tu acceso aquí: ${url} (válido por 15 min)`,
+        html: `Recupera tu acceso aquí: <a href="${url}">${url}</a> (válido por 15 min)`,
+      })
+      console.log(`✅ [Recuperación Admin] Email enviado exitosamente para: ${correo}`)
+      return true
+    } catch (error: any) {
+      console.error(`❌ [Recuperación Admin] ERROR al enviar email para ${correo}:`, error.message || error)
+      return false
+    }
   }
 
   // ADMIN: restablecer contraseña con token
@@ -86,6 +95,152 @@ export default class RecuperacionService {
     ;(inst as any).password = await bcrypt.hash(nueva, 10)
     await inst.save()
     return true
+  }
+
+  // ==================== ADMIN - MÉTODO CON CÓDIGO (NUEVO) ====================
+
+  // 1️⃣ SOLICITAR CÓDIGO - Admin
+  async solicitarCodigoAdminPorCorreo(correo: string) {
+    const inst = await Institucion.findBy('correo', correo.trim().toLowerCase())
+    if (!inst) return false
+
+    // Generar código de 6 dígitos
+    const codigo = Math.floor(100000 + Math.random() * 900000).toString()
+
+    // Generar JWT token para validación posterior
+    const token = jwt.sign(
+      { rol: 'administrador', id_institucion: inst.id_institucion, scope: 'recovery' },
+      SECRET,
+      { expiresIn: EXPIRES_RECOVERY }
+    )
+
+    // Guardar en caché (Redis o Map)
+    if (isRedisAvailable()) {
+      await setRecoveryCode(correo, codigo, token, 15)
+      console.log(`[Recuperación Admin] Código guardado en Redis para: ${correo}`)
+    } else {
+      recoveryCodesMap.set(correo, {
+        correo,
+        codigo,
+        token,
+        expiresAt: DateTime.now().plus({ minutes: 15 }),
+      })
+      console.log(`[Recuperación Admin] Código guardado en memoria (Map) para: ${correo}`)
+    }
+
+    // Enviar email con CÓDIGO
+    if (process.env.SMTP_HOST && process.env.SMTP_USER) {
+      try {
+        await mailer().sendMail({
+          from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
+          to: correo,
+          subject: 'Recuperación de contraseña - Código de verificación',
+          text: `Tu código de recuperación es: ${codigo}\n\nVálido por 15 minutos.\n\nNo compartas este código con nadie.`,
+          html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #1976D2;">Código de Recuperación - Administrador</h2>
+              <p>Tu código de verificación es:</p>
+              <div style="font-size: 36px; font-weight: bold; color: #1976D2; letter-spacing: 8px; 
+                           padding: 20px; text-align: center; background: #E3F2FD; border-radius: 8px;">
+                ${codigo}
+              </div>
+              <p>Este código es válido por <strong>15 minutos</strong>.</p>
+              <p style="color: #666; margin-top: 30px;">Si no solicitaste este código, ignora este mensaje.</p>
+            </div>
+          `,
+        })
+        console.log(`✅ [Recuperación Admin] Email con código enviado exitosamente para: ${correo}`)
+      } catch (error: any) {
+        console.error(`❌ [Recuperación Admin] ERROR al enviar email para ${correo}:`, error.message || error)
+      }
+    } else {
+      console.log(`⚠️ [Recuperación Admin] SMTP no configurado - Código generado: ${codigo} para: ${correo}`)
+    }
+
+    return { success: true, codigo }
+  }
+
+  // 2️⃣ VERIFICAR CÓDIGO - Admin
+  async verificarCodigoAdmin(correo: string, codigo: string) {
+    let data: any = null
+
+    if (isRedisAvailable()) {
+      data = await getRecoveryCode(correo)
+    } else {
+      data = recoveryCodesMap.get(correo)
+    }
+
+    if (!data) {
+      console.log(`[Recuperación Admin] No se encontró código para: ${correo}`)
+      return false
+    }
+
+    // Verificar expiración
+    const expiresAt = DateTime.fromISO(data.expiresAt)
+    if (DateTime.now() > expiresAt) {
+      if (isRedisAvailable()) {
+        await deleteRecoveryCode(correo)
+      } else {
+        recoveryCodesMap.delete(correo)
+      }
+      console.log(`[Recuperación Admin] Código expirado para: ${correo}`)
+      return false
+    }
+
+    // Verificar código
+    const isValid = data.codigo === codigo
+    if (isValid) {
+      console.log(`[Recuperación Admin] Código válido para: ${correo}`)
+    } else {
+      console.log(`[Recuperación Admin] Código incorrecto para: ${correo}`)
+    }
+
+    return isValid
+  }
+
+  // 3️⃣ RESTABLECER CONTRASEÑA - Admin con código
+  async restablecerPasswordAdminConCodigo(correo: string, codigo: string, nueva: string) {
+    // Verificar código primero
+    const valid = await this.verificarCodigoAdmin(correo, codigo)
+    if (!valid) {
+      console.log(`[Recuperación Admin] Intento de restablecimiento con código inválido para: ${correo}`)
+      return false
+    }
+
+    // Obtener datos del caché
+    let data: any = null
+    if (isRedisAvailable()) {
+      data = await getRecoveryCode(correo)
+    } else {
+      data = recoveryCodesMap.get(correo)
+    }
+
+    if (!data) {
+      return false
+    }
+
+    try {
+      // Verificar JWT token
+      const payload = jwt.verify(data.token, SECRET) as any
+      const inst = await Institucion.findOrFail(payload.id_institucion)
+
+      // Actualizar contraseña
+      ;(inst as any).password = await bcrypt.hash(nueva, 10)
+      await inst.save()
+
+      // Eliminar código del caché (ya usado)
+      if (isRedisAvailable()) {
+        await deleteRecoveryCode(correo)
+      } else {
+        recoveryCodesMap.delete(correo)
+      }
+
+      console.log(`[Recuperación Admin] Contraseña restablecida exitosamente para: ${correo}`)
+      return true
+    } catch (error) {
+      console.error(`[Recuperación Admin] Error al restablecer contraseña para: ${correo}`, error)
+      return false
+    }
   }
 
   // ESTUDIANTE: enviar correo con link/token
@@ -100,14 +255,21 @@ export default class RecuperacionService {
     )
 
     const url = `${process.env.FRONT_URL ?? 'http://localhost:5173'}/restablecer?token=${token}`
-    await mailer().sendMail({
-      from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
-      to: correo,
-      subject: 'Recuperación de acceso (Estudiante)',
-      text: `Recupera tu acceso aquí: ${url} (válido por 15 min)`,
-      html: `Recupera tu acceso aquí: <a href="${url}">${url}</a> (válido por 15 min)`,
-    })
-    return true
+    
+    try {
+      await mailer().sendMail({
+        from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
+        to: correo,
+        subject: 'Recuperación de acceso (Estudiante)',
+        text: `Recupera tu acceso aquí: ${url} (válido por 15 min)`,
+        html: `Recupera tu acceso aquí: <a href="${url}">${url}</a> (válido por 15 min)`,
+      })
+      console.log(`✅ [Recuperación Estudiante Web] Email enviado exitosamente para: ${correo}`)
+      return true
+    } catch (error: any) {
+      console.error(`❌ [Recuperación Estudiante Web] ERROR al enviar email para ${correo}:`, error.message || error)
+      return false
+    }
   }
 
   // ESTUDIANTE: restablecer contraseña
@@ -156,27 +318,37 @@ export default class RecuperacionService {
     // Enviar email con CÓDIGO (no link)
     // Si hay SMTP configurado, envía email, sino solo log
     if (process.env.SMTP_HOST && process.env.SMTP_USER) {
-      await mailer().sendMail({
-        from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
-        to: correo,
-        subject: 'Recuperación de contraseña - Código de verificación',
-        text: `Tu código de recuperación es: ${codigo}\n\nVálido por 15 minutos.\n\nNo compartas este código con nadie.`,
-        html: `
-          <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #1976D2;">Código de Recuperación</h2>
-            <p>Tu código de verificación es:</p>
-            <div style="font-size: 36px; font-weight: bold; color: #1976D2; letter-spacing: 8px; 
-                         padding: 20px; text-align: center; background: #E3F2FD; border-radius: 8px;">
-              ${codigo}
+      try {
+        await mailer().sendMail({
+          from: process.env.SMTP_FROM ?? 'no-reply@demo.com',
+          to: correo,
+          subject: 'Recuperación de contraseña - Código de verificación',
+          text: `Tu código de recuperación es: ${codigo}\n\nVálido por 15 minutos.\n\nNo compartas este código con nadie.`,
+          html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #1976D2;">Código de Recuperación</h2>
+              <p>Tu código de verificación es:</p>
+              <div style="font-size: 36px; font-weight: bold; color: #1976D2; letter-spacing: 8px; 
+                           padding: 20px; text-align: center; background: #E3F2FD; border-radius: 8px;">
+                ${codigo}
+              </div>
+              <p>Este código es válido por <strong>15 minutos</strong>.</p>
+              <p style="color: #666; margin-top: 30px;">Si no solicitaste este código, ignora este mensaje.</p>
             </div>
-            <p>Este código es válido por <strong>15 minutos</strong>.</p>
-            <p style="color: #666; margin-top: 30px;">Si no solicitaste este código, ignora este mensaje.</p>
-          </div>
-        `,
-      })
-      console.log(`[Recuperación] Email enviado con código para: ${correo}`)
+          `,
+        })
+        console.log(`✅ [Recuperación] Email enviado exitosamente para: ${correo}`)
+      } catch (error: any) {
+        console.error(`❌ [Recuperación] ERROR al enviar email para ${correo}:`, error.message || error)
+        console.error('Detalles del error SMTP:', {
+          host: process.env.SMTP_HOST,
+          port: process.env.SMTP_PORT,
+          user: process.env.SMTP_USER,
+          // No mostrar password por seguridad
+        })
+      }
     } else {
-      console.log(`[Recuperación] SMTP no configurado - Código generado: ${codigo} para: ${correo}`)
+      console.log(`⚠️ [Recuperación] SMTP no configurado - Código generado: ${codigo} para: ${correo}`)
     }
 
     return { success: true, codigo } // Devuelve el código para testing

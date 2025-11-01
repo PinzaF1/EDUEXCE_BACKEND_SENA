@@ -343,7 +343,7 @@ async aceptarReto(id_reto: number, id_usuario_invitado: number) {
         id_sesion,
         id_pregunta: Number((p as any).id_pregunta) || null,
         orden,
-        tiempo_asignado_seg: (p as any).time_limit_seconds ?? null,
+        // tiempo_asignado_seg: (p as any).time_limit_seconds ?? null, // ⚠️ Comentado - columna no existe en BD producción
       } as any)
       orden++
     }

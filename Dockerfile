@@ -25,6 +25,9 @@ ENV HOST=0.0.0.0
 COPY --from=deps  /app/node_modules ./node_modules
 COPY --from=build /app/build        ./build
 
+# IMPORTANTE: Docker Compose carga .env.production vía env_file
+# No es necesario copiarlo manualmente al contenedor
+
 EXPOSE 3333
 # OJO: Adonis arranca aquí
 CMD ["node","build/bin/server.js"]
