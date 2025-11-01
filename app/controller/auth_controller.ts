@@ -175,15 +175,19 @@ class AuthController {
 
   public async solicitarCodigoEstudiante({ request, response }: HttpContext) {
     try {
-      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      // Acepta tanto "correo" como "email" (compatibilidad con móvil)
+      const correo = String(request.input('correo') || request.input('email') || '').trim().toLowerCase()
       
       if (!correo) {
         return response.badRequest({ error: 'El correo es obligatorio' })
       }
 
+      console.log(`[Recuperación Estudiante] 🔵 Solicitud recibida para: ${correo}`)
+
       const result = await recuperacionService.solicitarCodigoEstudiantePorCorreo(correo)
       
       if (result && (result as any).success) {
+        console.log(`[Recuperación Estudiante] ✅ Código generado exitosamente para: ${correo}`)
         return response.ok({ 
           success: true, 
           message: 'Código enviado por email',
@@ -191,8 +195,10 @@ class AuthController {
         })
       }
       
+      console.log(`[Recuperación Estudiante] ⚠️ Correo no encontrado: ${correo}`)
       return response.notFound({ error: 'Correo no registrado' })
     } catch (e: any) {
+      console.error(`[Recuperación Estudiante] ❌ Error:`, e.message || e)
       return response.badRequest({ error: e.message || 'Error al solicitar código' })
     }
   }
@@ -200,21 +206,27 @@ class AuthController {
   // 2️⃣ VERIFICAR CÓDIGO - Móvil espera: POST /estudiante/recuperar/verificar
   public async verificarCodigoEstudiante({ request, response }: HttpContext) {
     try {
-      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      // Acepta tanto "correo" como "email" (compatibilidad con móvil)
+      const correo = String(request.input('correo') || request.input('email') || '').trim().toLowerCase()
       const codigo = String(request.input('codigo') || '').trim()
       
       if (!correo || !codigo) {
         return response.badRequest({ error: 'Correo y código son obligatorios' })
       }
 
+      console.log(`[Recuperación Estudiante] 🔍 Verificando código para: ${correo}`)
+
       const valid = await recuperacionService.verificarCodigoEstudiante(correo, codigo)
       
       if (valid) {
+        console.log(`[Recuperación Estudiante] ✅ Código válido para: ${correo}`)
         return response.ok({ valid: true, message: 'Código válido' })
       }
       
+      console.log(`[Recuperación Estudiante] ❌ Código inválido para: ${correo}`)
       return response.ok({ valid: false, message: 'Código inválido o expirado' })
     } catch (e: any) {
+      console.error(`[Recuperación Estudiante] ❌ Error al verificar:`, e.message || e)
       return response.badRequest({ error: e.message || 'Error al verificar código' })
     }
   }
@@ -222,9 +234,10 @@ class AuthController {
   // 3️⃣ RESTABLECER CONTRASEÑA - Móvil espera: POST /estudiante/recuperar/restablecer
   public async restablecerPasswordEstudiante({ request, response }: HttpContext) {
     try {
-      const correo = String(request.input('correo') || '').trim().toLowerCase()
+      // Acepta tanto "correo" como "email" (compatibilidad con móvil)
+      const correo = String(request.input('correo') || request.input('email') || '').trim().toLowerCase()
       const codigo = String(request.input('codigo') || '').trim()
-      const nueva = String(request.input('nueva_password') || '')
+      const nueva = String(request.input('nueva_password') || request.input('password') || '')
       
       if (!correo || !codigo || !nueva) {
         return response.badRequest({ error: 'Todos los campos son obligatorios' })
@@ -234,14 +247,19 @@ class AuthController {
         return response.badRequest({ error: 'La contraseña debe tener mínimo 6 caracteres' })
       }
 
+      console.log(`[Recuperación Estudiante] 🔄 Restableciendo contraseña para: ${correo}`)
+
       const ok = await recuperacionService.restablecerPasswordConCodigo(correo, codigo, nueva)
       
       if (ok) {
+        console.log(`[Recuperación Estudiante] ✅ Contraseña restablecida para: ${correo}`)
         return response.ok({ success: true, message: 'Contraseña restablecida exitosamente' })
       }
       
+      console.log(`[Recuperación Estudiante] ❌ No se pudo restablecer para: ${correo}`)
       return response.badRequest({ error: 'Código inválido, expirado o ya utilizado' })
     } catch (e: any) {
+      console.error(`[Recuperación Estudiante] ❌ Error al restablecer:`, e.message || e)
       return response.badRequest({ error: e.message || 'Error al restablecer contraseña' })
     }
   }
