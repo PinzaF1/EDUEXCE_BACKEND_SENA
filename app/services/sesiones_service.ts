@@ -5,6 +5,7 @@ import IaService, { AreaUI } from './ia_service.js'
 import EstilosAprendizaje from '../models/estilos_aprendizaje.js'
 import BancoPregunta from '../models/banco_pregunta.js'
 import ProgresoNivel from '../models/progreso_nivel.js'
+import Usuario from '../models/usuario.js'
 import { DateTime } from 'luxon'
 
 type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'sociales' | 'Ingles'
@@ -957,6 +958,36 @@ public async ProgresoDiagnostico(
       preguntas_por_intento: (ses as any).total_preguntas ?? 5,
     })
   }
+
+  // ========== TRIGGER: Notificación en tiempo real si puntaje bajo ==========
+  const puntajeFinal = (ses as any).puntaje_porcentaje ?? 0
+  if (puntajeFinal < 40 && (ses as any).area && (ses as any).id_usuario) {
+    // Ejecutar de forma asíncrona sin bloquear la respuesta
+    import('../services/notificaciones_realtime_service.js')
+      .then(async (module) => {
+        const NotificacionesRealtimeService = module.default
+        const realtimeService = new NotificacionesRealtimeService()
+        
+        // Obtener id_institucion del usuario
+        const usuario = await Usuario.query()
+          .where('id_usuario', (ses as any).id_usuario)
+          .select('id_institucion')
+          .first()
+        
+        if (usuario) {
+          await realtimeService.notificarPuntajeBajoInmediato(
+            (ses as any).id_usuario,
+            (ses as any).area,
+            puntajeFinal,
+            (usuario as any).id_institucion
+          )
+        }
+      })
+      .catch((error) => {
+        console.error('[Trigger] Error notificando puntaje bajo:', error)
+      })
+  }
+  // ==========================================================================
 
   return {
     aprueba,

@@ -37,6 +37,7 @@ Route.put('admin/estudiantes/:id', (ctx) => new AdminController().editarEstudian
 Route.delete('admin/estudiantes/:id', (ctx) => new AdminController().eliminarEstudiante(ctx)).use(onlyRol({ rol: 'administrador' }))
 
 Route.get('admin/notificaciones', (ctx) => new AdminController().notificaciones(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('admin/notificaciones/stream', (ctx) => new AdminController().notificacionesStream(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/notificaciones/generar', (ctx) => new AdminController().generarNotificaciones(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/notificaciones/marcar', (ctx) => new AdminController().marcarLeidas(ctx)).use(onlyRol({ rol: 'administrador' }))
 
