@@ -10,6 +10,12 @@ tmp
 .env.production.local
 .env.development.local
 
+# Firebase credentials (NEVER commit)
+config/firebase-admin-sdk.json
+firebase-admin-sdk.json
+*firebase-adminsdk*.json
+!*firebase-admin-sdk.example.json
+
 # Archivos con credenciales reales (no subir)
 CREDENCIALES_*.txt
 *_REALES.*

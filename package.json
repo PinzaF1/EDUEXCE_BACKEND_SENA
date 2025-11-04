@@ -67,6 +67,7 @@
     "bcryptjs": "^3.0.2",
     "csv-parse": "^6.1.0",
     "csv-parser": "^3.2.0",
+    "firebase-admin": "^13.5.0",
     "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.2",
     "luxon": "^3.7.1",

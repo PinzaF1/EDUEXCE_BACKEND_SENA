@@ -152,6 +152,30 @@ export default class NotificacionesRealtimeService {
           id_usuario_destino: id_usuario
         })
         
+        // ========== ENVIAR NOTIFICACIÓN FCM AL ESTUDIANTE ==========
+        try {
+          const FcmService = (await import('./fcm_service.js')).default
+          const fcmService = new FcmService()
+          
+          await fcmService.enviarNotificacionPorUsuario(
+            id_usuario,
+            '📉 Puntaje bajo detectado',
+            `Obtuviste ${puntaje}% en ${area}. ¡Sigue practicando!`,
+            {
+              tipo: 'puntaje_bajo_inmediato',
+              area: area,
+              puntaje: puntaje.toString(),
+              id_usuario: id_usuario.toString(),
+            }
+          )
+          
+          console.log(`[Notif RT FCM] Notificación push enviada a usuario ${id_usuario}`)
+        } catch (fcmError) {
+          console.error('[Notif RT FCM] Error enviando notificación push:', fcmError)
+          // No lanzar error para no interrumpir el flujo principal
+        }
+        // =============================================================
+        
         console.log(`[Notif RT] Puntaje bajo inmediato: ${nombreCompleto} - ${area}: ${puntaje}%`)
         return true
       }

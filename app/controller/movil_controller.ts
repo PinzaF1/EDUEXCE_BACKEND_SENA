@@ -7,6 +7,7 @@ import RankingService from '../services/ranking_service.js'
 import LogrosService from '../services/logros_service.js'
 import RetosService from '../services/retos_service.js'
 import EstudiantesService from '../services/estudiantes_service.js'
+import FcmService from '../services/fcm_service.js'
 
 const estudiantesService = new EstudiantesService()
 const kolbService = new KolbService()
@@ -689,6 +690,42 @@ public async editarMiPerfilContacto({ request, response }: HttpContext) {
     return response.badRequest({ error: e?.message || 'No se pudo cambiar la contraseña' });
   }
 }
+
+  // ================= FCM TOKEN =================
+  /**
+   * POST /movil/fcm-token
+   * Registra el token FCM del dispositivo móvil
+   */
+  public async registrarFcmToken({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const { token, device_id, platform } = request.only(['token', 'device_id', 'platform'])
+
+      if (!token) {
+        return response.badRequest({ message: 'Token FCM es requerido' })
+      }
+
+      const fcmService = new FcmService()
+
+      await fcmService.registrarToken(
+        Number(auth.id_usuario),
+        token,
+        device_id || null,
+        platform || 'android'
+      )
+
+      return response.ok({
+        message: 'Token FCM registrado exitosamente',
+        success: true,
+      })
+    } catch (error) {
+      console.error('Error al registrar token FCM:', error)
+      return response.internalServerError({
+        message: 'Error al registrar token FCM',
+        error: (error as Error).message,
+      })
+    }
+  }
 
 }
 

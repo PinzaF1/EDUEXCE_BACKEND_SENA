@@ -133,8 +133,22 @@ public async editarEstudiante({ request, response }: HttpContext) {
   // ===== Notificaciones =====
   public async notificaciones({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
-    const { tipo } = request.qs()
-    const data = await (notificacionesService as any).listar(Number(auth.id_institucion), tipo as any)
+    const qs = request.qs()
+    
+    // Parsear filtros desde query string
+    const opciones: any = {
+      tipo: qs.tipo || undefined,
+      page: qs.page ? Number(qs.page) : 1,
+      limit: qs.limit ? Number(qs.limit) : 50,
+      desde: qs.desde || undefined,
+      hasta: qs.hasta || undefined,
+    }
+    
+    // Filtro de leída: acepta 'true', 'false', o undefined (todas)
+    if (qs.leida === 'true') opciones.leida = true
+    else if (qs.leida === 'false') opciones.leida = false
+    
+    const data = await (notificacionesService as any).listar(Number(auth.id_institucion), opciones)
     return response.ok(data)
   }
 
