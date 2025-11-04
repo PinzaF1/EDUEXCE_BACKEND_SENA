@@ -109,6 +109,9 @@ Route.get('movil/retos/marcador', (ctx) => new MovilController().marcadorRetos(c
 Route.put('movil/perfil/:id', (ctx) => new MovilController().editarMiPerfilContacto(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/password', (ctx) => new MovilController().cambiarPasswordEstudiante(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
+// FCM TOKEN (NOTIFICACIONES PUSH)
+Route.post('movil/fcm-token', (ctx) => new MovilController().registrarFcmToken(ctx)).use(onlyRol({ rol: 'estudiante' }))
+
 
 
 
