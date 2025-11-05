@@ -695,28 +695,85 @@ async actualizarContacto(id_usuario: number, body: any) {
 
   // ===== Eliminar si no tiene historial, si no → inactivar =====
 
- async activarEstudiante(id_usuario: number) {
-      const usuario = await Usuario.findOrFail(id_usuario);
-      usuario.is_active = true;
-      await usuario.save();
-      return { estado: 'activado' as const };
+  async activarEstudiante(id_usuario: number, id_institucion?: number) {
+    const usuario = await Usuario.findOrFail(id_usuario);
+    
+    // 🔒 VALIDACIÓN DE SEGURIDAD: verificar que pertenece a la institución
+    if (id_institucion != null) {
+      const perteneceInstitucion = Number((usuario as any).id_institucion) === Number(id_institucion);
+      if (!perteneceInstitucion) {
+        // LOG DE SEGURIDAD - Intento de acceso no autorizado
+        console.error('⚠️ INTENTO DE ACTIVACIÓN NO AUTORIZADO:', {
+          id_usuario_objetivo: id_usuario,
+          institucion_usuario: (usuario as any).id_institucion,
+          institucion_solicitante: id_institucion,
+          timestamp: new Date().toISOString(),
+        });
+        throw new Error('No autorizado para activar estudiantes de otra institución');
+      }
+    }
+    
+    usuario.is_active = true;
+    await usuario.save();
+    
+    // LOG DE AUDITORÍA
+    console.log('✅ ESTUDIANTE ACTIVADO:', {
+      id_usuario,
+      institucion: (usuario as any).id_institucion,
+      timestamp: new Date().toISOString(),
+    });
+    
+    return { estado: 'activado' as const };
   }
 
   // Función para inactivar o eliminar un estudiante
-  public async eliminarOInactivar(id_usuario: number) {
-  const sesiones = await Sesion.query().where('id_usuario', id_usuario).limit(1);
- 
-  if (sesiones.length > 0) {
-      const usuario = await Usuario.findOrFail(id_usuario);
+  public async eliminarOInactivar(id_usuario: number, id_institucion?: number) {
+    const usuario = await Usuario.findOrFail(id_usuario);
+    
+    // 🔒 VALIDACIÓN DE SEGURIDAD: verificar que pertenece a la institución
+    if (id_institucion != null) {
+      const perteneceInstitucion = Number((usuario as any).id_institucion) === Number(id_institucion);
+      if (!perteneceInstitucion) {
+        // LOG DE SEGURIDAD - Intento de acceso no autorizado
+        console.error('⚠️ INTENTO DE ELIMINACIÓN NO AUTORIZADO:', {
+          id_usuario_objetivo: id_usuario,
+          institucion_usuario: (usuario as any).id_institucion,
+          institucion_solicitante: id_institucion,
+          timestamp: new Date().toISOString(),
+        });
+        throw new Error('No autorizado para eliminar estudiantes de otra institución');
+      }
+    }
+    
+    const sesiones = await Sesion.query().where('id_usuario', id_usuario).limit(1);
+    
+    if (sesiones.length > 0) {
       usuario.is_active = false;
       await usuario.save();
+      
+      // LOG DE AUDITORÍA
+      console.log('✅ ESTUDIANTE INACTIVADO:', {
+        id_usuario,
+        institucion: (usuario as any).id_institucion,
+        razon: 'tiene_historial',
+        timestamp: new Date().toISOString(),
+      });
+      
       return { estado: 'inactivado' as const };
-  } else {
-      const usuario = await Usuario.findOrFail(id_usuario);
-      await usuario.delete();  // Eliminar el usuario si no tiene historial
+    } else {
+      await usuario.delete();
+      
+      // LOG DE AUDITORÍA
+      console.log('✅ ESTUDIANTE ELIMINADO:', {
+        id_usuario,
+        institucion: (usuario as any).id_institucion,
+        razon: 'sin_historial',
+        timestamp: new Date().toISOString(),
+      });
+      
       return { estado: 'eliminado' as const };
+    }
   }
-}
 
 
 
