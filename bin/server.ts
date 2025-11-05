@@ -36,6 +36,19 @@ new Ignitor(APP_ROOT, { importer: IMPORTER })
       // Inicializar Redis si está configurado
       const { initRedis } = await import('#services/redis_service')
       initRedis()
+      
+      // Inicializar Firebase Admin SDK
+      try {
+        const { default: FirebaseService } = await import('#services/firebase_service')
+        FirebaseService.initialize()
+      } catch (error) {
+        console.warn('⚠️ Firebase Admin SDK no pudo inicializarse:', error)
+      }
+    })
+    app.ready(async () => {
+      // Inicializar sistema de notificaciones automáticas (cron)
+      const { default: iniciarCronNotificaciones } = await import('#start/cron')
+      iniciarCronNotificaciones()
     })
     app.listen('SIGTERM', () => app.terminate())
     app.listenIf(app.managedByPm2, 'SIGINT', () => app.terminate())

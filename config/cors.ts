@@ -11,6 +11,7 @@ const corsConfig = defineConfig({
   // Lista explícita de orígenes permitidos (más seguro que origin: true)
   // Agrega aquí los dominios de tu frontend y ngrok
   origin: [
+    'http://localhost:5175', // Puerto actual del frontend
     'http://localhost:5176',
     'http://localhost:5173',
     'http://localhost:3000',

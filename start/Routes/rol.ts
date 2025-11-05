@@ -37,6 +37,7 @@ Route.put('admin/estudiantes/:id', (ctx) => new AdminController().editarEstudian
 Route.delete('admin/estudiantes/:id', (ctx) => new AdminController().eliminarEstudiante(ctx)).use(onlyRol({ rol: 'administrador' }))
 
 Route.get('admin/notificaciones', (ctx) => new AdminController().notificaciones(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.get('admin/notificaciones/stream', (ctx) => new AdminController().notificacionesStream(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/notificaciones/generar', (ctx) => new AdminController().generarNotificaciones(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/notificaciones/marcar', (ctx) => new AdminController().marcarLeidas(ctx)).use(onlyRol({ rol: 'administrador' }))
 
@@ -107,6 +108,9 @@ Route.get('movil/retos/marcador', (ctx) => new MovilController().marcadorRetos(c
 
 Route.put('movil/perfil/:id', (ctx) => new MovilController().editarMiPerfilContacto(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/password', (ctx) => new MovilController().cambiarPasswordEstudiante(ctx)).use(onlyRol({ rol: 'estudiante' }))
+
+// FCM TOKEN (NOTIFICACIONES PUSH)
+Route.post('movil/fcm-token', (ctx) => new MovilController().registrarFcmToken(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 
 

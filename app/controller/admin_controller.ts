@@ -133,8 +133,22 @@ public async editarEstudiante({ request, response }: HttpContext) {
   // ===== Notificaciones =====
   public async notificaciones({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
-    const { tipo } = request.qs()
-    const data = await (notificacionesService as any).listar(Number(auth.id_institucion), tipo as any)
+    const qs = request.qs()
+    
+    // Parsear filtros desde query string
+    const opciones: any = {
+      tipo: qs.tipo || undefined,
+      page: qs.page ? Number(qs.page) : 1,
+      limit: qs.limit ? Number(qs.limit) : 50,
+      desde: qs.desde || undefined,
+      hasta: qs.hasta || undefined,
+    }
+    
+    // Filtro de leída: acepta 'true', 'false', o undefined (todas)
+    if (qs.leida === 'true') opciones.leida = true
+    else if (qs.leida === 'false') opciones.leida = false
+    
+    const data = await (notificacionesService as any).listar(Number(auth.id_institucion), opciones)
     return response.ok(data)
   }
 
@@ -324,6 +338,74 @@ public async webRendimientoPorArea({ request, response }: HttpContext) {
   const auth = (request as any).authUsuario
   const data = await (seguimientoService as any).rendimientoPorArea(Number(auth.id_institucion))
   return response.ok(data) // { items: [{ area: 'Matematicas'|..., promedio: number }] }
+}
+
+// ====== NOTIFICACIONES EN TIEMPO REAL (SSE - Server-Sent Events)
+public async notificacionesStream({ request, response }: HttpContext) {
+  const auth = (request as any).authUsuario
+  const id_institucion = Number(auth.id_institucion)
+  
+  console.log(`[SSE] Admin conectado - Institución ${id_institucion}`)
+  
+  // Configurar headers para SSE
+  response.response.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no', // Para nginx
+    'Access-Control-Allow-Origin': '*', // Ajustar según tu CORS
+    'Access-Control-Allow-Credentials': 'true'
+  })
+  
+  // Enviar mensaje inicial de conexión exitosa
+  response.response.write(`data: ${JSON.stringify({ 
+    tipo: 'conexion', 
+    mensaje: 'Conectado a notificaciones en tiempo real',
+    timestamp: new Date().toISOString()
+  })}\n\n`)
+  
+  // Suscribirse a Redis Pub/Sub
+  const { subscribeNotificaciones } = await import('../services/redis_service.js')
+  const subscriber = subscribeNotificaciones(id_institucion, (notificacion) => {
+    try {
+      // Enviar notificación al cliente vía SSE
+      response.response.write(`data: ${JSON.stringify(notificacion)}\n\n`)
+      console.log(`[SSE] Notificación enviada a admin de institución ${id_institucion}:`, notificacion.tipo)
+    } catch (error) {
+      console.error('[SSE] Error enviando notificación:', error)
+    }
+  })
+  
+  // Heartbeat cada 30 segundos para mantener la conexión viva
+  const heartbeatInterval = setInterval(() => {
+    try {
+      response.response.write(`: heartbeat ${new Date().toISOString()}\n\n`)
+    } catch (error) {
+      console.error('[SSE] Error en heartbeat:', error)
+      clearInterval(heartbeatInterval)
+    }
+  }, 30000)
+  
+  // Cleanup cuando el cliente cierra la conexión
+  request.request.on('close', () => {
+    console.log(`[SSE] Admin desconectado - Institución ${id_institucion}`)
+    clearInterval(heartbeatInterval)
+    
+    if (subscriber) {
+      subscriber.unsubscribe()
+      subscriber.quit()
+    }
+  })
+  
+  request.request.on('error', (error) => {
+    console.error('[SSE] Error en conexión:', error)
+    clearInterval(heartbeatInterval)
+    
+    if (subscriber) {
+      subscriber.unsubscribe()
+      subscriber.quit()
+    }
+  })
 }
 
 }

@@ -66,12 +66,50 @@ async function yaExisteEnElMes(
 
 export default class NotificacionesService {
   // ===== Listado / marcado =====
-  async listar(id_institucion: number, tipo?: string) {
-    const q = Notificacion.query().where('id_institucion', id_institucion)
-    if (tipo) q.andWhere('tipo', tipo)
-    const rows = await q.orderBy('created_at', 'desc')
+  async listar(
+    id_institucion: number,
+    opciones: {
+      tipo?: string
+      leida?: boolean | null
+      page?: number
+      limit?: number
+      desde?: string // fecha ISO
+      hasta?: string // fecha ISO
+    } = {}
+  ) {
+    const {
+      tipo,
+      leida,
+      page = 1,
+      limit = 50,
+      desde,
+      hasta,
+    } = opciones
 
-    return rows.map((n: any) => ({
+    // Validar y sanitizar
+    const pageNum = Math.max(1, Number(page) || 1)
+    const limitNum = Math.min(100, Math.max(10, Number(limit) || 50)) // entre 10 y 100
+    const offset = (pageNum - 1) * limitNum
+
+    // Query base
+    const baseQuery = Notificacion.query().where('id_institucion', id_institucion)
+
+    // Filtros
+    if (tipo) baseQuery.andWhere('tipo', tipo)
+    if (typeof leida === 'boolean') baseQuery.andWhere('leida', leida)
+    if (desde) baseQuery.andWhere('created_at', '>=', new Date(desde) as any)
+    if (hasta) baseQuery.andWhere('created_at', '<=', new Date(hasta) as any)
+
+    // Total count (para paginación)
+    const [{ count: total }] = await baseQuery.clone().count('* as count')
+
+    // Obtener datos paginados
+    const rows = await baseQuery
+      .orderBy('created_at', 'desc')
+      .limit(limitNum)
+      .offset(offset)
+
+    const notificaciones = rows.map((n: any) => ({
       id: n.id_notificacion,
       id_institucion: n.id_institucion,
       id_usuario_destino: n.id_usuario_destino ?? null,
@@ -81,7 +119,20 @@ export default class NotificacionesService {
       payload: n.payload ?? null,
       leida: !!n.leida,
       createdAt: n.createdAt ?? n.created_at ?? null,
+      created_at: n.created_at ?? n.createdAt ?? null, // Alias
     }))
+
+    return {
+      notificaciones,
+      paginacion: {
+        page: pageNum,
+        limit: limitNum,
+        total: Number(total) || 0,
+        totalPages: Math.ceil((Number(total) || 0) / limitNum),
+        hasNextPage: pageNum * limitNum < (Number(total) || 0),
+        hasPrevPage: pageNum > 1,
+      },
+    }
   }
 
   async marcarLeidas(ids: number[]) {
