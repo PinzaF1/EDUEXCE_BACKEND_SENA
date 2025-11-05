@@ -20,7 +20,11 @@ firebase-admin-sdk.json
 CREDENCIALES_*.txt
 *_REALES.*
 test-smtp-verificado.cjs
+test-smtp.cjs
 env.txt
+
+# Reportes y documentación temporal (no subir)
+REPORTE_SEGURIDAD.md
 
 # Archivos temporales de testing
 test-recovery-flow.*
