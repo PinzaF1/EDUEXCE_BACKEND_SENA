@@ -109,23 +109,31 @@ public async editarEstudiante({ request, response }: HttpContext) {
   public async eliminarEstudiante({ request, response }: HttpContext) {
     const id = Number(request.param('id'))
     const { action } = request.qs() as any // opcional: 'activar' | 'inactivar' | 'eliminar'
+    
+    // 🔒 SEGURIDAD: obtener institución del token JWT
+    const auth = (request as any).authUsuario
+    const id_institucion = Number(auth.id_institucion)
 
     try {
       // Si piden activar explícitamente
       if (String(action).toLowerCase() === 'activar') {
-        const data = await estudiantesService.activarEstudiante(id)
+        const data = await estudiantesService.activarEstudiante(id, id_institucion)
         return response.ok(data)
       }
 
       // Comportamiento por defecto para DELETE:
       // si tiene historial → inactivar; si no tiene → eliminar
-      const data = await estudiantesService.eliminarOInactivar(id)
+      const data = await estudiantesService.eliminarOInactivar(id, id_institucion)
       if ((data as any).estado === 'inactivado') {
         return response.status(409).send({ error: 'Tiene historial; se inactivó en lugar de eliminar', ...data })
       }
       return response.ok(data)
-    } catch (e) {
-      return response.status(500).send({ error: 'Error al procesar la solicitud' })
+    } catch (e: any) {
+      // Si es error de autorización, retornar 403
+      if (e.message?.includes('No autorizado')) {
+        return response.status(403).send({ error: e.message })
+      }
+      return response.status(500).send({ error: e.message || 'Error al procesar la solicitud' })
     }
   }
 
