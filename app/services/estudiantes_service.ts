@@ -2,6 +2,7 @@
 import type { HttpContext } from '@adonisjs/core/http'
 import bcrypt from 'bcrypt'
 import Usuario from '../models/usuario.js'
+import Institucion from '../models/institucione.js'
 import Sesion from '../models/sesione.js'
 import fs from 'node:fs/promises'
 import * as xlsx from 'xlsx'
@@ -65,8 +66,62 @@ function normEmail(e: any): string | null {
 }
 
 export default class EstudiantesService {
-  private claveInicial(numero_documento: string, apellido: string) {
-    return `${numero_documento}${(apellido || '').toLowerCase().slice(-3)}`
+  /**
+   * Genera la contraseña inicial: número de documento + 3 últimas letras del apellido
+   * Remueve tildes pero mantiene la ñ
+   * Ejemplo: "12345678" + "Muñoz" -> "12345678ñoz"
+   * Ejemplo: "12345678" + "García" -> "12345678cia" (sin tilde)
+   * Ejemplo: "12345678" + "Muñ" -> "12345678uñ" (si tiene menos de 3 letras, usa todas)
+   */
+  private claveInicial(numero_documento: string, apellido: string): string {
+    // Validar número de documento
+    const doc = String(numero_documento || '').trim()
+    if (!doc) {
+      throw new Error('El número de documento es requerido para generar la contraseña')
+    }
+    
+    // Validar apellido
+    const apellidoStr = String(apellido || '').trim()
+    if (!apellidoStr) {
+      throw new Error('El apellido es requerido para generar la contraseña')
+    }
+    
+    // Convertir a minúsculas
+    let apellidoLower = apellidoStr.toLowerCase()
+    
+    // Remover tildes pero mantener ñ
+    // Reemplazar vocales con tilde por vocales sin tilde
+    // PERO mantener la ñ (ñ no se reemplaza)
+    apellidoLower = apellidoLower
+      .replace(/á/g, 'a')
+      .replace(/é/g, 'e')
+      .replace(/í/g, 'i')
+      .replace(/ó/g, 'o')
+      .replace(/ú/g, 'u')
+      .replace(/ü/g, 'u')
+      .replace(/Á/g, 'a')
+      .replace(/É/g, 'e')
+      .replace(/Í/g, 'i')
+      .replace(/Ó/g, 'o')
+      .replace(/Ú/g, 'u')
+      .replace(/Ü/g, 'u')
+      // La ñ se mantiene tal cual (no se reemplaza)
+    
+    // Tomar las últimas 3 letras
+    let ultimas3Letras = apellidoLower.slice(-3)
+    
+    // Si el apellido tiene menos de 3 letras, usar todas las disponibles
+    if (ultimas3Letras.length < 3 && apellidoLower.length > 0) {
+      ultimas3Letras = apellidoLower
+    }
+    
+    // Si aún no hay letras (caso muy raro), usar un fallback
+    if (!ultimas3Letras || ultimas3Letras.length === 0) {
+      ultimas3Letras = 'xxx' // Fallback si no hay apellido válido
+    }
+    
+    // Concatenar: número de documento + últimas 3 letras
+    return `${doc}${ultimas3Letras}`
   }
 
 
@@ -111,8 +166,79 @@ export default class EstudiantesService {
 
     // Unicidad GLOBAL por numero_documento
     const ya = await Usuario.query().where('numero_documento', payload.numero_documento!).first()
+    
+    // Si existe en otra institución, retornar información completa
     if (ya && (ya as any).id_institucion !== payload.id_institucion) {
-      throw new Error('El número de documento ya está registrado en otra institución')
+      const institucion = await Institucion.find((ya as any).id_institucion)
+      throw {
+        error: 'DUPLICADO_OTRA_INSTITUCION',
+        mensaje: 'El número de documento ya está registrado en otra institución',
+        estudiante_nuevo: {
+          tipo_documento: payload.tipo_documento,
+          numero_documento: payload.numero_documento,
+          nombre: payload.nombre,
+          apellido: payload.apellido,
+          correo: payload.correo,
+          direccion: payload.direccion,
+          telefono: payload.telefono,
+          grado: payload.grado,
+          curso: payload.curso,
+          jornada: payload.jornada,
+        },
+        estudiante_existente: {
+          id_usuario: (ya as any).id_usuario,
+          tipo_documento: (ya as any).tipo_documento,
+          numero_documento: (ya as any).numero_documento,
+          nombre: (ya as any).nombre,
+          apellido: (ya as any).apellido,
+          correo: (ya as any).correo,
+          direccion: (ya as any).direccion,
+          telefono: (ya as any).telefono,
+          grado: (ya as any).grado,
+          curso: (ya as any).curso,
+          jornada: (ya as any).jornada,
+        },
+        institucion: institucion ? {
+          id_institucion: (institucion as any).id_institucion,
+          nombre_institucion: (institucion as any).nombre_institucion,
+          codigo_dane: (institucion as any).codigo_dane,
+          ciudad: (institucion as any).ciudad,
+          departamento: (institucion as any).departamento,
+        } : null,
+      }
+    }
+    
+    // Si existe en la misma institución, retornar información completa
+    if (ya && (ya as any).id_institucion === payload.id_institucion) {
+      throw {
+        error: 'DUPLICADO_MISMA_INSTITUCION',
+        mensaje: 'El estudiante ya está registrado en esta institución',
+        estudiante_nuevo: {
+          tipo_documento: payload.tipo_documento,
+          numero_documento: payload.numero_documento,
+          nombre: payload.nombre,
+          apellido: payload.apellido,
+          correo: payload.correo,
+          direccion: payload.direccion,
+          telefono: payload.telefono,
+          grado: payload.grado,
+          curso: payload.curso,
+          jornada: payload.jornada,
+        },
+        estudiante_existente: {
+          id_usuario: (ya as any).id_usuario,
+          tipo_documento: (ya as any).tipo_documento,
+          numero_documento: (ya as any).numero_documento,
+          nombre: (ya as any).nombre,
+          apellido: (ya as any).apellido,
+          correo: (ya as any).correo,
+          direccion: (ya as any).direccion,
+          telefono: (ya as any).telefono,
+          grado: (ya as any).grado,
+          curso: (ya as any).curso,
+          jornada: (ya as any).jornada,
+        },
+      }
     }
 
     const plano = this.claveInicial(payload.numero_documento!, payload.apellido!)
@@ -330,84 +456,327 @@ export default class EstudiantesService {
       const aInsertar: any[] = []
       const aActualizar: any[] = []
       const conflictosOtraInst: any[] = []
+      const idsUsuariosDuplicados = new Set<number>()
+      const idsUsuariosConflictos = new Set<number>()
+      const idsInstitucionesConflictos = new Set<number>()
 
       for (const c of candidatos) {
         const k = `${String(c.tipo_documento || '').toUpperCase()}|${c.numero_documento}`
         const ex = existePorDoc.get(k)
         if (!ex) {
           const exNum = existePorNumero.get(String(c.numero_documento))
-          if (exNum && exNum.id_institucion === id_institucion) aActualizar.push({ ...c, _updateByNumero: true })
-          else if (exNum) conflictosOtraInst.push({ ...c, id_institucion_existente: exNum.id_institucion })
+          if (exNum && exNum.id_institucion === id_institucion) {
+            aActualizar.push({ ...c, _updateByNumero: true })
+            idsUsuariosDuplicados.add(exNum.id_usuario)
+          }
+          else if (exNum) {
+            conflictosOtraInst.push({ ...c, id_usuario_existente: exNum.id_usuario, id_institucion_existente: exNum.id_institucion })
+            idsUsuariosConflictos.add(exNum.id_usuario)
+            idsInstitucionesConflictos.add(exNum.id_institucion)
+          }
           else aInsertar.push(c)
-        } else if (ex.id_institucion === id_institucion) aActualizar.push(c)
-        else conflictosOtraInst.push({ ...c, id_institucion_existente: ex.id_institucion })
+        } else if (ex.id_institucion === id_institucion) {
+          aActualizar.push(c)
+          idsUsuariosDuplicados.add(ex.id_usuario)
+        }
+        else {
+          conflictosOtraInst.push({ ...c, id_usuario_existente: ex.id_usuario, id_institucion_existente: ex.id_institucion })
+          idsUsuariosConflictos.add(ex.id_usuario)
+          idsInstitucionesConflictos.add(ex.id_institucion)
+        }
+      }
+
+      // Pre-cargar todos los estudiantes duplicados y conflictos de una vez
+      const usuariosDuplicadosMap = new Map<number, any>()
+      const usuariosConflictosMap = new Map<number, any>()
+      const institucionesMap = new Map<number, any>()
+
+      if (idsUsuariosDuplicados.size > 0) {
+        const usuarios = await Usuario.query().whereIn('id_usuario', Array.from(idsUsuariosDuplicados))
+        for (const u of usuarios) {
+          usuariosDuplicadosMap.set((u as any).id_usuario, u)
+        }
+      }
+
+      if (idsUsuariosConflictos.size > 0) {
+        const usuarios = await Usuario.query().whereIn('id_usuario', Array.from(idsUsuariosConflictos))
+        for (const u of usuarios) {
+          usuariosConflictosMap.set((u as any).id_usuario, u)
+        }
+      }
+
+      if (idsInstitucionesConflictos.size > 0) {
+        const instituciones = await Institucion.query().whereIn('id_institucion', Array.from(idsInstitucionesConflictos))
+        for (const inst of instituciones) {
+          institucionesMap.set((inst as any).id_institucion, inst)
+        }
+      }
+
+      // Construir arrays de duplicados y conflictos completos
+      const duplicadosMismaInst: any[] = []
+      for (const c of candidatos) {
+        const k = `${String(c.tipo_documento || '').toUpperCase()}|${c.numero_documento}`
+        const ex = existePorDoc.get(k)
+        const exNum = existePorNumero.get(String(c.numero_documento))
+        const idUsuario = ex?.id_usuario || exNum?.id_usuario
+        if (idUsuario && (ex?.id_institucion === id_institucion || (exNum?.id_institucion === id_institucion))) {
+          const estudianteExistente = usuariosDuplicadosMap.get(idUsuario)
+          if (estudianteExistente) {
+            duplicadosMismaInst.push({
+              ...c,
+              estudiante_existente: {
+                id_usuario: (estudianteExistente as any).id_usuario,
+                tipo_documento: (estudianteExistente as any).tipo_documento,
+                numero_documento: (estudianteExistente as any).numero_documento,
+                nombre: (estudianteExistente as any).nombre,
+                apellido: (estudianteExistente as any).apellido,
+                correo: (estudianteExistente as any).correo,
+                direccion: (estudianteExistente as any).direccion,
+                telefono: (estudianteExistente as any).telefono,
+                grado: (estudianteExistente as any).grado,
+                curso: (estudianteExistente as any).curso,
+                jornada: (estudianteExistente as any).jornada,
+              }
+            })
+          }
+        }
+      }
+
+      // Pre-cargar correos existentes de la institución para validación (optimización)
+      const correosExistentes = new Set<string>()
+      if (aInsertar.length > 0) {
+        const correosAConsultar = aInsertar.map(e => e.correo || `${e.numero_documento}@noemail.local`).filter(Boolean)
+        if (correosAConsultar.length > 0) {
+          const usuariosConCorreo = await Usuario.query()
+            .where('id_institucion', id_institucion)
+            .whereIn('correo', correosAConsultar)
+            .select('correo')
+          for (const u of usuariosConCorreo) {
+            if ((u as any).correo) correosExistentes.add((u as any).correo)
+          }
+        }
       }
 
       // insertar (solo los que NO existen en ninguna institución)
       const creadosDocs: string[] = []
-      for (const e of aInsertar) {
+      
+      // Preparar todos los hashes en paralelo (más rápido)
+      const hashesPromises = aInsertar.map(async (e) => {
         const plano = this.claveInicial(e.numero_documento, e.apellido)
-        const hash = await bcrypt.hash(plano, 10)
-        // asegurar unicidad de correo por institución
-        let correoSeguro = e.correo || `${e.numero_documento}@noemail.local`
+        return { hash: await bcrypt.hash(plano, 10), e }
+      })
+      const hashes = await Promise.all(hashesPromises)
+      
+      for (const { hash, e } of hashes) {
         try {
-          const yaCorreo = await Usuario.query()
-            .where('id_institucion', e.id_institucion)
-            .where('correo', correoSeguro)
-            .first()
-          if (yaCorreo) correoSeguro = `${e.numero_documento}@noemail.local`
-        } catch {}
+          // Validar correo usando Set pre-cargado (más rápido)
+          let correoSeguro = e.correo || `${e.numero_documento}@noemail.local`
+          if (correosExistentes.has(correoSeguro)) {
+            correoSeguro = `${e.numero_documento}@noemail.local`
+          }
 
-        const u = await Usuario.create({
-          id_institucion: e.id_institucion,
-          rol: 'estudiante',
-          tipo_documento: e.tipo_documento,
-          numero_documento: e.numero_documento,
-          nombre: e.nombre,
-          apellido: e.apellido,
-          correo: correoSeguro,
-          direccion: e.direccion,
-          telefono: e.telefono,
-          grado: e.grado,
-          curso: e.curso,
-          jornada: e.jornada,
-          password_hash: hash,
-          is_active: true,
-        } as any)
-        if (u?.id_usuario) creadosDocs.push(e.numero_documento)
-      }
-
-      // actualizar (misma institución; no toca password)
-      let actualizados = 0
-      for (const e of aActualizar) {
-        const k = `${String(e.tipo_documento || '').toUpperCase()}|${e.numero_documento}`
-        const ex = existePorDoc.get(k) || existePorNumero.get(String(e.numero_documento))!
-        const u = await Usuario.findOrFail(ex.id_usuario)
-        let camb = 0
-        const set = (k: keyof any, val: any) => {
-          if ((u as any)[k] !== val) { (u as any)[k] = val; camb++ }
-        }
-        set('tipo_documento', up(e.tipo_documento))
-        set('nombre', clean(e.nombre))
-        set('apellido', clean(e.apellido))
-        // correo: intentar actualizar solo si no genera conflicto de unicidad
-        {
-          const nuevo = normEmail(e.correo)
-          if (nuevo && nuevo !== (u as any).correo) {
-            const existeCorreo = await Usuario.query()
-              .where('id_institucion', (u as any).id_institucion)
-              .where('correo', nuevo)
-              .whereNot('id_usuario', (u as any).id_usuario)
+          const u = await Usuario.create({
+            id_institucion: e.id_institucion,
+            rol: 'estudiante',
+            tipo_documento: e.tipo_documento,
+            numero_documento: e.numero_documento,
+            nombre: e.nombre,
+            apellido: e.apellido,
+            correo: correoSeguro,
+            direccion: e.direccion,
+            telefono: e.telefono,
+            grado: e.grado,
+            curso: e.curso,
+            jornada: e.jornada,
+            password_hash: hash,
+            is_active: true,
+          } as any)
+          if (u?.id_usuario) {
+            creadosDocs.push(e.numero_documento)
+            // Agregar el correo a correosExistentes para evitar conflictos en el mismo batch
+            if (correoSeguro) correosExistentes.add(correoSeguro)
+          }
+        } catch (createErr: any) {
+          // Si falla por constraint único, intentar verificar si ya existe
+          if (createErr?.code === '23505' || createErr?.message?.includes('unique') || createErr?.message?.includes('duplicate')) {
+            // Verificar si ya existe en la base de datos
+            const existente = await Usuario.query()
+              .where('numero_documento', e.numero_documento)
+              .where('id_institucion', e.id_institucion)
               .first()
-            if (!existeCorreo) set('correo', nuevo)
+            
+            if (existente) {
+              // Ya existe, agregar a actualizar en lugar de crear
+              aActualizar.push({ ...e, _updateByNumero: true })
+              idsUsuariosDuplicados.add((existente as any).id_usuario)
+            }
+          } else {
+            // Otro error, loguearlo pero continuar
+            console.error(`[subirCSV] Error al crear usuario ${e.numero_documento}:`, createErr?.message || createErr)
           }
         }
-        set('direccion', clean(e.direccion))
-        set('telefono', clean(e.telefono))
-        set('grado', normGrado(e.grado))
-        set('curso', normCurso(e.curso))
-        set('jornada', normJornada(e.jornada))
-        if (camb) { await u.save(); actualizados++ }
+      }
+
+      // Función para procesar actualizaciones (reutilizable después de manejar errores)
+      const procesarActualizaciones = async (listaActualizar: any[]) => {
+        if (listaActualizar.length === 0) return 0
+        
+        // Pre-cargar todos los usuarios a actualizar de una vez
+        const idsUsuariosActualizar = new Set<number>()
+        for (const e of listaActualizar) {
+          const k = `${String(e.tipo_documento || '').toUpperCase()}|${e.numero_documento}`
+          const ex = existePorDoc.get(k) || existePorNumero.get(String(e.numero_documento))
+          if (ex) idsUsuariosActualizar.add(ex.id_usuario)
+        }
+
+        // Si hay nuevos IDs agregados por errores, cargarlos también
+        for (const e of listaActualizar) {
+          if (e._updateByNumero) {
+            const existente = await Usuario.query()
+              .where('numero_documento', e.numero_documento)
+              .where('id_institucion', id_institucion)
+              .first()
+            if (existente) {
+              idsUsuariosActualizar.add((existente as any).id_usuario)
+              existePorNumero.set(String(e.numero_documento), {
+                id_usuario: (existente as any).id_usuario,
+                id_institucion: id_institucion
+              })
+            }
+          }
+        }
+
+        const usuariosActualizarMap = new Map<number, any>()
+        if (idsUsuariosActualizar.size > 0) {
+          const usuarios = await Usuario.query().whereIn('id_usuario', Array.from(idsUsuariosActualizar))
+          for (const u of usuarios) {
+            usuariosActualizarMap.set((u as any).id_usuario, u)
+          }
+        }
+
+        // Pre-cargar correos existentes para validación de actualizaciones
+        const correosNuevos = listaActualizar
+          .map(e => normEmail(e.correo))
+          .filter((c): c is string => !!c && c !== '')
+        const correosExistentesActualizar = new Set<string>()
+        if (correosNuevos.length > 0) {
+          const usuariosConCorreo = await Usuario.query()
+            .where('id_institucion', id_institucion)
+            .whereIn('correo', correosNuevos)
+            .select(['id_usuario', 'correo'])
+          for (const u of usuariosConCorreo) {
+            if ((u as any).correo) correosExistentesActualizar.add((u as any).correo)
+          }
+        }
+
+        // actualizar (misma institución; no toca password)
+        let actualizados = 0
+        for (const e of listaActualizar) {
+          const k = `${String(e.tipo_documento || '').toUpperCase()}|${e.numero_documento}`
+          let ex = existePorDoc.get(k) || existePorNumero.get(String(e.numero_documento))
+          
+          // Si no existe en los mapas, buscar directamente
+          if (!ex) {
+            const existente = await Usuario.query()
+              .where('numero_documento', e.numero_documento)
+              .where('id_institucion', id_institucion)
+              .first()
+            if (existente) {
+              ex = {
+                id_usuario: (existente as any).id_usuario,
+                id_institucion: id_institucion
+              }
+              existePorNumero.set(String(e.numero_documento), ex)
+            }
+          }
+          
+          if (!ex) continue
+          
+          let u = usuariosActualizarMap.get(ex.id_usuario)
+          if (!u) {
+            u = await Usuario.find(ex.id_usuario)
+            if (u) usuariosActualizarMap.set(ex.id_usuario, u)
+          }
+          
+          if (!u) continue
+          
+          let camb = 0
+          const set = (k: keyof any, val: any) => {
+            if ((u as any)[k] !== val) { (u as any)[k] = val; camb++ }
+          }
+          set('tipo_documento', up(e.tipo_documento))
+          set('nombre', clean(e.nombre))
+          set('apellido', clean(e.apellido))
+          // correo: intentar actualizar solo si no genera conflicto de unicidad
+          {
+            const nuevo = normEmail(e.correo)
+            if (nuevo && nuevo !== (u as any).correo) {
+              if (!correosExistentesActualizar.has(nuevo)) {
+                set('correo', nuevo)
+              }
+            }
+          }
+          set('direccion', clean(e.direccion))
+          set('telefono', clean(e.telefono))
+          set('grado', normGrado(e.grado))
+          set('curso', normCurso(e.curso))
+          set('jornada', normJornada(e.jornada))
+          if (camb) { await u.save(); actualizados++ }
+        }
+        
+        return actualizados
+      }
+
+      // Procesar actualizaciones iniciales
+      let actualizados = await procesarActualizaciones(aActualizar)
+      
+      // Re-procesar actualizaciones si se agregaron nuevos después de errores de creación
+      if (aActualizar.length > 0) {
+        const nuevosActualizados = await procesarActualizaciones(aActualizar)
+        actualizados = Math.max(actualizados, nuevosActualizados)
+      }
+
+      // Obtener información completa de estudiantes en otras instituciones (ya pre-cargados)
+      const conflictosCompletos: any[] = []
+      for (const conflicto of conflictosOtraInst) {
+        const estudianteExistente = usuariosConflictosMap.get(conflicto.id_usuario_existente)
+        if (estudianteExistente) {
+          const institucion = institucionesMap.get(conflicto.id_institucion_existente)
+          conflictosCompletos.push({
+            estudiante_nuevo: {
+              tipo_documento: conflicto.tipo_documento,
+              numero_documento: conflicto.numero_documento,
+              nombre: conflicto.nombre,
+              apellido: conflicto.apellido,
+              correo: conflicto.correo,
+              direccion: conflicto.direccion,
+              telefono: conflicto.telefono,
+              grado: conflicto.grado,
+              curso: conflicto.curso,
+              jornada: conflicto.jornada,
+            },
+            estudiante_existente: {
+              id_usuario: (estudianteExistente as any).id_usuario,
+              tipo_documento: (estudianteExistente as any).tipo_documento,
+              numero_documento: (estudianteExistente as any).numero_documento,
+              nombre: (estudianteExistente as any).nombre,
+              apellido: (estudianteExistente as any).apellido,
+              correo: (estudianteExistente as any).correo,
+              direccion: (estudianteExistente as any).direccion,
+              telefono: (estudianteExistente as any).telefono,
+              grado: (estudianteExistente as any).grado,
+              curso: (estudianteExistente as any).curso,
+              jornada: (estudianteExistente as any).jornada,
+            },
+            institucion: institucion ? {
+              id_institucion: (institucion as any).id_institucion,
+              nombre_institucion: (institucion as any).nombre_institucion,
+              codigo_dane: (institucion as any).codigo_dane,
+              ciudad: (institucion as any).ciudad,
+              departamento: (institucion as any).departamento,
+            } : null,
+          })
+        }
       }
 
       const omitidos_por_existir =
@@ -429,6 +798,8 @@ export default class EstudiantesService {
         documentos_en_otras_instituciones: conflictosOtraInst.slice(0, 10).map(x => x.numero_documento),
         total_leidos: rows.length,
         omitidos,
+        duplicados_misma_institucion: duplicadosMismaInst,
+        conflictos_otras_instituciones: conflictosCompletos,
       })
     } catch (err: any) {
       return response.badRequest({ error: 'Error al importar', detalle: err?.message || String(err) })

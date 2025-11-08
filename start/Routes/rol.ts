@@ -97,6 +97,8 @@ Route.get('movil/logros/todos', (ctx) => new MovilController().logrosTodos(ctx))
 Route.get('movil/retos/oponentes', (ctx) => new MovilController().listarOponentes(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/retos', (ctx) => new MovilController().crearReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/retos/:id_reto/aceptar', (ctx) => new MovilController().aceptarReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/retos/:id_reto/rechazar', (ctx) => new MovilController().rechazarReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.delete('movil/retos/:id_reto/abandonar', (ctx) => new MovilController().abandonarReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/retos/ronda', (ctx) => new MovilController().responderRonda(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/retos/:id_reto/estado', (ctx) => new MovilController().estadoReto(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.get('movil/retos', (ctx) => new MovilController().listarRetos(ctx)).use(onlyRol({ rol: 'estudiante' }))
@@ -108,6 +110,13 @@ Route.get('movil/retos/marcador', (ctx) => new MovilController().marcadorRetos(c
 
 Route.put('movil/perfil/:id', (ctx) => new MovilController().editarMiPerfilContacto(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/password', (ctx) => new MovilController().cambiarPasswordEstudiante(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('users/me/photo', (ctx) => new MovilController().subirFotoPerfil(ctx)).use(onlyRol({ rol: 'estudiante' }))
+
+// SINCRONIZACIÓN DE PROGRESO (NIVELES Y VIDAS)
+Route.get('movil/sincronizacion/progreso', (ctx) => new MovilController().obtenerProgresoSincronizacion(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/sincronizacion/nivel', (ctx) => new MovilController().actualizarNivelDesbloqueado(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/sincronizacion/vidas', (ctx) => new MovilController().actualizarVidas(ctx)).use(onlyRol({ rol: 'estudiante' }))
+Route.post('movil/sincronizacion/todo', (ctx) => new MovilController().sincronizarProgreso(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
 
 
