@@ -2,6 +2,7 @@
 import Sesion from '../models/sesione.js'
 import SesionDetalle from '../models/sesiones_detalle.js'
 import IaService, { AreaUI } from './ia_service.js'
+import IaExternalService from './ia_external_service.js'
 import EstilosAprendizaje from '../models/estilos_aprendizaje.js'
 import BancoPregunta from '../models/banco_pregunta.js'
 import ProgresoNivel from '../models/progreso_nivel.js'
@@ -676,50 +677,93 @@ public async ProgresoDiagnostico(
       ? ('sociales' as AreaUI)
       : (area as AreaUI);
 
-  // 1) Intento rápido: obtener preguntas filtradas por subtema
-  let locales = await this.ia.generarPreguntas({
-    area: areaUI,
-    subtemas: [subtema],
-    estilo_kolb,
-    cantidad: 5,
-    excluir_ids: excludeIds,
-  } as any);
+  // ========== INTEGRACIÓN CON API DE IA ==========
+  let preguntasIA: any[] = []
+  let usandoIA = false
+  let preguntasGeneradasJSONB: any = null
 
-  // 2) Plan B: Si no hay suficientes preguntas por subtema, intentar obtener preguntas aleatorias por área
-  if (!locales.length) {
-    locales = await this.ia.generarPreguntas({
-      area: areaUI,
-      cantidad: 5,
-      excluir_ids: excludeIds,
-    } as any);
+  // 1) Intentar generar preguntas con API de IA
+  if (estilo_kolb) {
+    try {
+      console.log('[crearParada] Intentando generar preguntas con API de IA...')
+      const preguntasTransformadas = await IaExternalService.generarPreguntasIA({
+        area: areaUI,
+        subtema,
+        estilo_kolb,
+        cantidad: 5,
+      })
+
+      if (preguntasTransformadas && preguntasTransformadas.length > 0) {
+        console.log(`[crearParada] API de IA generó ${preguntasTransformadas.length} preguntas`)
+        preguntasIA = IaExternalService.prepararParaMovil(preguntasTransformadas)
+        preguntasGeneradasJSONB = IaExternalService.prepararParaJSONB(preguntasTransformadas)
+        usandoIA = true
+      }
+    } catch (error) {
+      console.error('[crearParada] Error al llamar API de IA, usando fallback a BD local:', error)
+    }
   }
 
-  // 3) Crear sesión y adjuntar las preguntas obtenidas
+  // 2) Fallback: Si API de IA falló o no hay estilo Kolb, usar BD local
+  let locales: any[] = []
+  if (!usandoIA) {
+    console.log('[crearParada] Usando banco de preguntas local')
+    locales = await this.ia.generarPreguntas({
+      area: areaUI,
+      subtemas: [subtema],
+      estilo_kolb,
+      cantidad: 5,
+      excluir_ids: excludeIds,
+    } as any)
+
+    // Plan B: Si no hay suficientes preguntas por subtema, intentar obtener preguntas aleatorias por área
+    if (!locales.length) {
+      locales = await this.ia.generarPreguntas({
+        area: areaUI,
+        cantidad: 5,
+        excluir_ids: excludeIds,
+      } as any)
+    }
+  }
+
+  // 3) Crear sesión
+  const totalPreguntas = usandoIA ? preguntasIA.length : locales.length
   const sesion = await this.upStartOrReuse({
     id_usuario: d.id_usuario,
     area,
     tipo: 'practica',
     nivel_orden: d.nivel_orden ?? null,
     subtema,
-    total_preguntas: locales.length,
+    total_preguntas: totalPreguntas,
     modo: 'estandar',
     usa_estilo_kolb: !!d.usa_estilo_kolb,
-  });
+  })
 
-  if (locales.length) {
-    await this.upAttachPreguntas(Number((sesion as any).id_sesion), locales);
+  const id_sesion = Number((sesion as any).id_sesion)
+
+  // 4) Guardar preguntas según la fuente
+  if (usandoIA) {
+    // Guardar preguntas de IA en JSONB
+    ;(sesion as any).preguntas_generadas = preguntasGeneradasJSONB
+    await sesion.save()
+    console.log(`[crearParada] Preguntas de IA guardadas en JSONB para sesión ${id_sesion}`)
+  } else {
+    // Guardar referencias en sesiones_detalles (BD local)
+    if (locales.length) {
+      await this.upAttachPreguntas(id_sesion, locales)
+    }
+
+    // Sembrado en segundo plano (no bloquea)
+    void (async () => {
+      await this.ia.generarYSembrarEnBancoBackground({
+        area: areaUI,
+        subtemas: [subtema],
+        estilo_kolb,
+        cantidad: 5,
+        excluir_ids: excludeIds,
+      } as any)
+    })()
   }
-
-  // 4) Sembrado en segundo plano (no bloquea)
-  void (async () => {
-    await this.ia.generarYSembrarEnBancoBackground({
-      area: areaUI,
-      subtemas: [subtema],
-      estilo_kolb,
-      cantidad: 5,
-      excluir_ids: excludeIds,
-    } as any);
-  })();
 
   // 5) Actualizar el progreso de nivel del usuario
   await upsertProgresoNivel({
@@ -727,20 +771,25 @@ public async ProgresoDiagnostico(
     area: d.area,
     subtema: d.subtema,
     nivel_orden: d.nivel_orden,
-    preguntas_por_intento: (sesion as any).total_preguntas ?? 1,
-  });
+    preguntas_por_intento: totalPreguntas ?? 1,
+  })
 
-  // Devolver los resultados de la sesión
+  // 6) Devolver los resultados de la sesión
+  const preguntasParaMovil = usandoIA
+    ? preguntasIA
+    : (locales || []).map((p: any) => ({
+        id_pregunta: p.id_pregunta,
+        area: p.area ?? area,
+        subtema,
+        enunciado: p.pregunta,
+        opciones: fmtOpciones(p.opciones),
+      }))
+
   return {
     sesion,
-    preguntas: (locales || []).map((p: any) => ({
-      id_pregunta: p.id_pregunta,
-      area: p.area ?? area,
-      subtema,
-      enunciado: p.pregunta,
-      opciones: fmtOpciones(p.opciones),
-    })),
-  };
+    preguntas: preguntasParaMovil,
+    usandoIA, // Flag para debugging
+  }
 }
 
     async cerrarSesion(d: {
@@ -758,6 +807,16 @@ public async ProgresoDiagnostico(
   this.ensureDetalleTable()
 
   const ses = await Sesion.findOrFail(d.id_sesion)
+
+  // ========== DETECTAR SI USA PREGUNTAS DE IA (JSONB) ==========
+  const preguntasGeneradas = (ses as any).preguntas_generadas
+  const usandoIA = preguntasGeneradas && Array.isArray(preguntasGeneradas) && preguntasGeneradas.length > 0
+
+  if (usandoIA) {
+    console.log(`[cerrarSesion] Sesión ${d.id_sesion} usa preguntas de IA (JSONB)`)
+  } else {
+    console.log(`[cerrarSesion] Sesión ${d.id_sesion} usa banco de preguntas local`)
+  }
 
   const detalles = await SesionDetalle.query()
     .where('id_sesion', (ses as any).id_sesion)
@@ -843,18 +902,35 @@ public async ProgresoDiagnostico(
     }
   }
 
-  // Precargar banco
-  const idsPreg = (detalles as any[]).map((x: any) => Number(x.id_pregunta)).filter((x) => Number.isFinite(x))
-  const banco = idsPreg.length ? await BancoPregunta.query().whereIn('id_pregunta', idsPreg) : []
-
+  // ========== CARGAR RESPUESTAS CORRECTAS ==========
   const totalOpcDe = new Map<number, number>()
   const correctaDe = new Map<number, string>()
-  for (const b of banco as any[]) {
-    const idp = Number(b.id_pregunta)
-    const totalOpc = safeOpcCount((b as any).opciones, 4)
-    const letraCorrecta = extractCorrectLetter(b, totalOpc)
-    totalOpcDe.set(idp, totalOpc)
-    correctaDe.set(idp, letraCorrecta)
+  const correctaPorOrden = new Map<number, string>() // Para preguntas de IA
+
+  if (usandoIA) {
+    // Cargar respuestas correctas desde JSONB
+    for (const pregIA of preguntasGeneradas) {
+      const orden = Number(pregIA.orden)
+      const respuestaCorrecta = String(pregIA.respuesta_correcta || '').trim().toUpperCase()
+      const totalOpc = pregIA.opciones ? Object.keys(pregIA.opciones).length : 4
+      
+      correctaPorOrden.set(orden, respuestaCorrecta)
+      totalOpcDe.set(orden, totalOpc)
+      
+      console.log(`[cerrarSesion] Pregunta IA orden ${orden}: correcta=${respuestaCorrecta}`)
+    }
+  } else {
+    // Precargar banco (lógica original)
+    const idsPreg = (detalles as any[]).map((x: any) => Number(x.id_pregunta)).filter((x) => Number.isFinite(x))
+    const banco = idsPreg.length ? await BancoPregunta.query().whereIn('id_pregunta', idsPreg) : []
+
+    for (const b of banco as any[]) {
+      const idp = Number(b.id_pregunta)
+      const totalOpc = safeOpcCount((b as any).opciones, 4)
+      const letraCorrecta = extractCorrectLetter(b, totalOpc)
+      totalOpcDe.set(idp, totalOpc)
+      correctaDe.set(idp, letraCorrecta)
+    }
   }
 
   let correctas = 0
@@ -888,8 +964,32 @@ public async ProgresoDiagnostico(
 
   // ---------- Procesar cada respuesta ----------
   for (const r of respuestas) {
+    const orden = Number(r.orden ?? NaN)
     const idp = Number(r.id_pregunta ?? NaN)
 
+    // ========== EVALUACIÓN PARA PREGUNTAS DE IA ==========
+    if (usandoIA && Number.isFinite(orden)) {
+      const alternativa_elegida = String(r.opcion || '').trim().toUpperCase().slice(0, 1)
+      const correcta = correctaPorOrden.get(orden) || ''
+      const totalOpc = totalOpcDe.get(orden) ?? 4
+      const marcada = toLetter(alternativa_elegida, totalOpc)
+      
+      const esCorrecta = !!correcta && !!marcada && marcada === correcta
+      if (esCorrecta) correctas++
+
+      detalleResumen.push({
+        id_pregunta: null, // Las preguntas de IA no tienen id en BD
+        orden,
+        correcta: correcta || null,
+        marcada: marcada || null,
+        es_correcta: esCorrecta,
+      })
+      
+      console.log(`[cerrarSesion] Orden ${orden}: marcada=${marcada}, correcta=${correcta}, es_correcta=${esCorrecta}`)
+      continue
+    }
+
+    // ========== EVALUACIÓN PARA BANCO LOCAL (LÓGICA ORIGINAL) ==========
     // localizar detalle por orden o por id
     let det: any = null
     if (r.orden != null) det = (detalles as any[]).find((x) => Number(x.orden) === Number(r.orden))
