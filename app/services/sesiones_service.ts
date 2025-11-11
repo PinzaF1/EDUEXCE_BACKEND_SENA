@@ -710,14 +710,24 @@ public async ProgresoDiagnostico(
       cantidad: 5,
     })
 
+    console.log(`[crearParada] 🔍 Preguntas recibidas de API:`, preguntasTransformadas?.length ?? 0)
+    console.log(`[crearParada] 🔍 Tipo:`, typeof preguntasTransformadas)
+    console.log(`[crearParada] 🔍 Es array:`, Array.isArray(preguntasTransformadas))
+
     if (preguntasTransformadas && preguntasTransformadas.length > 0) {
-      console.log(`[crearParada] ✅ API de IA generó ${preguntasTransformadas.length} preguntas`)
+      console.log(`[crearParada] ✅ VALIDACIÓN EXITOSA: API de IA generó ${preguntasTransformadas.length} preguntas`)
       preguntasIA = IaExternalService.prepararParaMovil(preguntasTransformadas)
       preguntasGeneradasJSONB = IaExternalService.prepararParaJSONB(preguntasTransformadas)
       usandoIA = true
+      console.log(`[crearParada] ✅ Preguntas preparadas para móvil:`, preguntasIA.length)
+      console.log(`[crearParada] ✅ Preguntas preparadas para JSONB:`, preguntasGeneradasJSONB.length)
+    } else {
+      console.warn(`[crearParada] ⚠️ VALIDACIÓN FALLÓ: preguntasTransformadas vacío o undefined`)
     }
   } catch (error) {
-    console.error('[crearParada] ❌ Error al llamar API de IA, usando fallback a BD local:', error)
+    console.error('[crearParada] ❌ ERROR CAPTURADO: Al llamar API de IA, usando fallback a BD local')
+    console.error('[crearParada] Error type:', error instanceof Error ? error.constructor.name : typeof error)
+    console.error('[crearParada] Error message:', error instanceof Error ? error.message : String(error))
   }
 
   // 2) Fallback: Si API de IA falló o no hay estilo Kolb, usar BD local
