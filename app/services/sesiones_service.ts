@@ -3,6 +3,7 @@ import Sesion from '../models/sesione.js'
 import SesionDetalle from '../models/sesiones_detalle.js'
 import IaService, { AreaUI } from './ia_service.js'
 import IaExternalService from './ia_external_service.js'
+import { mapearSubtema } from './subtemas_mapper.js'
 import EstilosAprendizaje from '../models/estilos_aprendizaje.js'
 import BancoPregunta from '../models/banco_pregunta.js'
 import ProgresoNivel from '../models/progreso_nivel.js'
@@ -694,11 +695,17 @@ public async ProgresoDiagnostico(
   // Si no hay estilo Kolb, la API de IA genera preguntas genéricas sin adaptación
   const estiloParaIA = estilo_kolb || 'Asimilador'  // Fallback solo para compatibilidad con API
   
+  // Mapear subtema a formato que acepta la API de IA
+  const subtemaParaAPI = mapearSubtema(areaUI, subtema)
+  
   try {
     console.log(`[crearParada] 🤖 Intentando generar preguntas con API de IA...`)
+    console.log(`[crearParada] Subtema original: "${subtema}"`)
+    console.log(`[crearParada] Subtema para API: "${subtemaParaAPI}"`)
+    
     const preguntasTransformadas = await IaExternalService.generarPreguntasIA({
       area: areaUI,
-      subtema,
+      subtema: subtemaParaAPI,
       estilo_kolb: estiloParaIA,
       cantidad: 5,
     })
