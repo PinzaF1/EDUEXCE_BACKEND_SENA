@@ -1477,149 +1477,268 @@ public async ProgresoDiagnostico(
     }
   }
 
-  async detalleSesion(id_sesion: number) {
-    this.ensureDetalleTable()
+ async detalleSesion(id_sesion: number) {
+  this.ensureDetalleTable()
 
-    const ses = await Sesion.find(id_sesion)
-    if (!ses) return null
-    const row: any = ses
+  const ses = await Sesion.find(id_sesion)
+  if (!ses) return null
+  const row: any = ses
 
-    const detalles = await SesionDetalle.query().where('id_sesion', id_sesion).orderBy('orden', 'asc')
+  const detalles = await SesionDetalle.query()
+    .where('id_sesion', id_sesion)
+    .orderBy('orden', 'asc')
 
-    const ids = detalles.map((d: any) => Number(d.id_pregunta)).filter(Boolean)
-    const banco = ids.length ? await BancoPregunta.query().whereIn('id_pregunta', ids) : []
-
-    const totalOpcDe = new Map<number, number>()
-    const correctaDe = new Map<number, string>()
-    const enunDe = new Map<number, string>()
-    const areaDe = new Map<number, string>()
-    const subtemaDe = new Map<number, string>()
-    const explicacionDe = new Map<number, string>()
-
-    for (const b of banco as any[]) {
-      const idp = Number(b.id_pregunta)
-      const total = safeOpcCount((b as any).opciones, 4)
-      totalOpcDe.set(idp, total)
-      correctaDe.set(idp, extractCorrectLetter(b, total))
-      enunDe.set(idp, String((b as any).pregunta ?? ''))
-      areaDe.set(idp, String((b as any).area ?? ''))
-      subtemaDe.set(idp, String((b as any).subtema ?? ''))
-      if ((b as any).explicacion) explicacionDe.set(idp, String((b as any).explicacion))
+  // Si no hay detalles, retorna estructura mínima consistente (sin IA)
+  if (!Array.isArray(detalles) || detalles.length === 0) {
+    const headerMateriaFallback =
+      String(row.tipo) === 'simulacro_mixto' ? 'Todas las áreas' : String(row.area || 'General')
+    return {
+      header: {
+        materia: headerMateriaFallback,
+        fecha: row.fin_at ?? row.inicio_at,
+        nivel: this.nivelNombre(0),
+        nivelOrden: Number(row.nivel_orden ?? null),
+        puntaje: 0,
+        escala: 'porcentaje',
+        tiempo_total_seg: 0,
+        correctas: 0,
+        incorrectas: 0,
+        total: 0,
+      },
+      resumen: { cambio: 'igual', mensaje: 'Te mantuviste', nivelActual: Number(row.nivel_orden ?? null) },
+      preguntas: [],
+      analisis: { fortalezas: [], subtemas_a_mejorar: [], mejoras: [], recomendaciones: [] },
     }
-
-   const preguntas = detalles.map((det: any) => {
-  console.log(`det: ${JSON.stringify(det)}`);  // Verifica si alternativa_elegida está presente
-  const idp = Number(det.id_pregunta);
-  const total = totalOpcDe.get(idp) ?? 4;
-
-  // Aquí se asegura que si no hay alternativa elegida, se asigna un valor vacío.
-  const alternativaElegida = det.alternativa_elegida ? det.alternativa_elegida : '';
-  
-  const marcada = toLetter(alternativaElegida, total); // Aquí debería tener la respuesta seleccionada
-  const correcta = correctaDe.get(idp) || null;
-
-  // Verifica si la respuesta es correcta, comparando ambas en mayúsculas
-  const es_correcta = marcada.trim().toUpperCase() === correcta?.trim().toUpperCase();
-
-  return {
-    orden: Number(det.orden),
-    id_pregunta: idp,
-    area: areaDe.get(idp) ?? null,
-    subtema: subtemaDe.get(idp) ?? null,
-    enunciado: enunDe.get(idp) ?? null,
-    correcta,
-    marcada,
-    es_correcta,
-    explicacion: explicacionDe.get(idp) ?? null,
-    tiempo_empleado_seg: det.tiempo_empleado_seg ?? null,
   }
-});
 
+  const ids = detalles.map((d: any) => Number(d.id_pregunta)).filter(Boolean)
+  const banco = ids.length ? await BancoPregunta.query().whereIn('id_pregunta', ids) : []
 
+  const totalOpcDe = new Map<number, number>()
+  const correctaDe = new Map<number, string>()
+  const enunDe = new Map<number, string>()
+  const areaDe = new Map<number, string>()
+  const subtemaDe = new Map<number, string>()
+  const explicacionDe = new Map<number, string>()
 
-    const correctas = preguntas.filter((p) => p.es_correcta).length
-    const total = Number(row.total_preguntas || preguntas.length || 0)
-    const porcentaje = Number(row.puntaje_porcentaje ?? Math.round((correctas * 100) / Math.max(1, total)))
-    const nivelActual = this.nivelNombre(porcentaje)
+  for (const b of banco as any[]) {
+    const idp = Number(b.id_pregunta)
+    const total = safeOpcCount((b as any).opciones, 4)
+    totalOpcDe.set(idp, total)
+    correctaDe.set(idp, extractCorrectLetter(b, total))
+    enunDe.set(idp, String((b as any).pregunta ?? ''))
+    areaDe.set(idp, String((b as any).area ?? ''))
+    subtemaDe.set(idp, String((b as any).subtema ?? ''))
+    if ((b as any).explicacion) explicacionDe.set(idp, String((b as any).explicacion))
+  }
 
-    const tiempoSum = detalles.reduce((acc: number, d: any) => acc + (Number(d.tiempo_empleado_seg) || 0), 0)
-    const tiempoTotalSeg =
-      tiempoSum > 0
-        ? tiempoSum
-        : (() => {
-            const ini = row.inicio_at ? DateTime.fromISO(String(row.inicio_at)) : null
-            const fin = row.fin_at ? DateTime.fromISO(String(row.fin_at)) : null
-            if (ini && fin) return Math.max(0, Math.round(fin.diff(ini, 'seconds').seconds))
-            return null
-          })()
+  // ---------- Construcción de preguntas (robusto ante nulos) ----------
+  const preguntas = detalles.map((det: any) => {
+    const idp = Number(det.id_pregunta)
+    const totalOpc = totalOpcDe.get(idp) ?? 4
+    const alternativaElegidaRaw = (det?.alternativa_elegida ?? '').toString()
+    const marcada = toLetter(alternativaElegidaRaw, totalOpc)
+    const correcta = correctaDe.get(idp) || null
+    const es_correcta =
+      !!marcada &&
+      !!correcta &&
+      marcada.trim().toUpperCase() === String(correcta).trim().toUpperCase()
 
+    return {
+      orden: Number(det.orden),
+      id_pregunta: idp,
+      area: areaDe.get(idp) ?? null,
+      subtema: subtemaDe.get(idp) ?? null,
+      enunciado: enunDe.get(idp) ?? null,
+      correcta,
+      marcada,
+      es_correcta,
+      explicacion: explicacionDe.get(idp) ?? null,
+      tiempo_empleado_seg: Number.isFinite(Number(det.tiempo_empleado_seg))
+        ? Number(det.tiempo_empleado_seg)
+        : null,
+    }
+  })
+  // -------------------------------------------------------------------
+
+  const correctas = preguntas.filter((p) => p.es_correcta).length
+  const totalPreguntas = Number(row.total_preguntas || preguntas.length || 0)
+  const porcentaje = Number(
+    row.puntaje_porcentaje ?? Math.round((correctas * 100) / Math.max(1, totalPreguntas))
+  )
+  const nivelActual = this.nivelNombre(porcentaje)
+
+  // Duración total: suma de tiempos, o diff(inicio, fin) como fallback
+  const tiempoSum = detalles.reduce(
+    (acc: number, d: any) => acc + (Number(d.tiempo_empleado_seg) || 0),
+    0
+  )
+  const tiempoTotalSeg =
+    tiempoSum > 0
+      ? tiempoSum
+      : (() => {
+          const ini = row.inicio_at ? DateTime.fromISO(String(row.inicio_at)) : null
+          const fin = row.fin_at ? DateTime.fromISO(String(row.fin_at)) : null
+          if (ini && fin) return Math.max(0, Math.round(fin.diff(ini, 'seconds').seconds))
+          return 0
+        })()
+
+  // Header/escala
+  const esMixto = String(row.tipo) === 'simulacro_mixto'
+  const esSimArea = String(row.tipo) === 'simulacro'
+  const headerMateria = esMixto ? 'Todas las áreas' : String(row.area || 'General')
+  const puntajeGlobal = esMixto || esSimArea ? this.icfes(porcentaje) : porcentaje
+  const escala: 'ICFES' | 'porcentaje' = (esMixto || esSimArea) ? 'ICFES' : 'porcentaje'
+
+  // ======== IA con fallback seguro ========
+  let fortalezas: string[] = []
+  let subtemas_a_mejorar: string[] = []
+  let recomendaciones: string[] = []
+
+  // Fallback local (por si IA falla): agrupa por subtema y calcula %
+  const calcLocal = () => {
     const porSubtema = new Map<string, { total: number; ok: number }>()
     for (const p of preguntas) {
-      const st = p.subtema || 'General'
+      const st = (p.subtema || 'General').trim() || 'General'
       const v = porSubtema.get(st) || { total: 0, ok: 0 }
       v.total += 1
       if (p.es_correcta) v.ok += 1
       porSubtema.set(st, v)
     }
 
-    const fortalezas: string[] = []
-    const mejoras: string[] = []
+    const fuertes: string[] = []
+    const debiles: string[] = []
     for (const [st, agg] of porSubtema.entries()) {
       const pct = agg.total ? Math.round((agg.ok / agg.total) * 100) : 0
-      if (pct >= 80) fortalezas.push(st)
-      else mejoras.push(st)
-    }
-    const recomendaciones = [
-      ...(mejoras.length ? [`Refuerza: ${mejoras.join(', ')}`] : []),
-      'Repite el intento con foco en tus áreas de mejora',
-    ]
-
-    let cambioNivel: 'mejora' | 'empeora' | 'igual' = 'igual'
-    let nivelActualNum: number | null = Number(row.nivel_orden ?? null)
-    let labelCambio = ''
-
-    if (String(row.tipo).toLowerCase() === 'practica') {
-      const prev = await this.ultimaSesionAnteriorPractica(row)
-      if (prev) {
-        const nivelAnterior = Number((prev as any).nivel_orden ?? null)
-        if (Number.isFinite(nivelAnterior) && Number.isFinite(nivelActualNum as any)) {
-          if ((nivelActualNum as number) > nivelAnterior) cambioNivel = 'mejora'
-          else if ((nivelActualNum as number) < nivelAnterior) cambioNivel = 'empeora'
-          else cambioNivel = 'igual'
-        }
-      }
-      labelCambio = cambioNivel === 'mejora' ? 'Mejoraste' : cambioNivel === 'empeora' ? 'Empeoraste' : 'Te mantuviste'
+      if (pct >= 80) fuertes.push(st)
+      else debiles.push(st)
     }
 
-    const esMixto = String(row.tipo) === 'simulacro_mixto'
-    const esSimArea = String(row.tipo) === 'simulacro'
-    const headerMateria = esMixto ? 'Todas las áreas' : String(row.area || 'General')
-    const puntajeGlobal = esMixto || esSimArea ? this.icfes(porcentaje) : porcentaje
+    // Recomendaciones diversas (máx 2 subtemas débiles)
+    const mk = (st: string) => {
+      const tag = st.trim()
+      return [
+        `Repasa ${tag} durante 15–20 minutos enfocándote en definiciones y ejemplos base.`,
+        `Resuelve 10–12 preguntas de ${tag} y revisa las explicaciones, registrando por qué te equivocaste.`,
+        `Crea 5 tarjetas tipo flashcard de ${tag} y repásalas mañana (repetición espaciada).`,
+        `Escribe un mini resumen de 3–5 puntos sobre ${tag} y explícalo en voz alta (método Feynman).`,
+        `Haz práctica cronometrada de ${tag} (1–2 bloques de 10 minutos) para ganar velocidad y precisión.`,
+        `Alterna ${tag} con otro subtema fuerte para intercalar práctica y consolidar (interleaving).`,
+      ]
+    }
+    const picks = debiles.slice(0, 2)
+    const recs: string[] = []
+    for (const st of picks) recs.push(...mk(st))
+    // Hábitos generales
+    recs.push(
+      'Programa una sesión de repaso de errores en 48–72 horas.',
+      'Realiza un mini simulacro de 10 preguntas y compara resultados con esta sesión.',
+      'Aplica la técnica Pomodoro (25/5) en dos sesiones adicionales esta semana.'
+    )
 
-    return {
+    return { fuertes, debiles, recs }
+  }
+
+  try {
+    // Import dinámico protegido: si no existe el servicio o falla, usamos fallback local
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const IaOpenAIService = (await import('./ia_openai_service.js')).default
+    const ia = new IaOpenAIService()
+
+    const analisisIA = await ia.analizarDesdeDetalleSesion({
       header: {
         materia: headerMateria,
-        fecha: row.fin_at ?? row.inicio_at,
-        nivel: nivelActual,
-        nivelOrden: nivelActualNum,
-        puntaje: puntajeGlobal,
-        escala: esMixto || esSimArea ? 'ICFES' : 'porcentaje',
-        tiempo_total_seg: tiempoTotalSeg,
+        nivel: String(nivelActual),
         correctas,
-        incorrectas: total - correctas,
-        total,
+        incorrectas: totalPreguntas - correctas,
+        total: totalPreguntas,
+        puntaje: puntajeGlobal,
+        escala,
       },
-      resumen: {
-        cambio: cambioNivel,
-        mensaje: labelCambio,
-        nivelActual: nivelActualNum,
-      },
-      preguntas,
-      analisis: {
-        fortalezas,
-        mejoras,
-        recomendaciones,
-      },
+      preguntas: preguntas.map((p) => ({
+        subtema: p.subtema ?? 'General',
+        es_correcta: !!p.es_correcta,
+      })),
+    })
+
+    const fIA = Array.isArray(analisisIA?.fortalezas) ? analisisIA.fortalezas : []
+    const mIA = Array.isArray(analisisIA?.mejoras) ? analisisIA.mejoras : []
+    const rIA = Array.isArray(analisisIA?.recomendaciones) ? analisisIA.recomendaciones : []
+
+    if (fIA.length || mIA.length || rIA.length) {
+      fortalezas = fIA
+      subtemas_a_mejorar = mIA
+      // Si la IA no trae variedad, complementamos con 1–2 extras del local para los top débiles
+      if (rIA.length >= 3) {
+        recomendaciones = rIA
+      } else {
+        const loc = calcLocal()
+        recomendaciones = [...rIA, ...loc.recs.slice(0, 3)]
+        if (!fortalezas.length) fortalezas = loc.fuertes
+        if (!subtemas_a_mejorar.length) subtemas_a_mejorar = loc.debiles
+      }
+    } else {
+      const loc = calcLocal()
+      fortalezas = loc.fuertes
+      subtemas_a_mejorar = loc.debiles
+      recomendaciones = loc.recs
     }
+  } catch (err) {
+    // IA deshabilitada o error → fallback local
+    console.error('[detalleSesion] IA deshabilitada o falló, usando fallback local:', err)
+    const loc = calcLocal()
+    fortalezas = loc.fuertes
+    subtemas_a_mejorar = loc.debiles
+    recomendaciones = loc.recs
   }
+  // ========================================
+
+  // Cambio de nivel respecto a última práctica
+  let cambioNivel: 'mejora' | 'empeora' | 'igual' = 'igual'
+  let nivelActualNum: number | null = Number(row.nivel_orden ?? null)
+  let labelCambio = ''
+
+  if (String(row.tipo).toLowerCase() === 'practica') {
+    const prev = await this.ultimaSesionAnteriorPractica(row)
+    if (prev) {
+      const nivelAnterior = Number((prev as any).nivel_orden ?? null)
+      if (Number.isFinite(nivelAnterior) && Number.isFinite(nivelActualNum as any)) {
+        if ((nivelActualNum as number) > nivelAnterior) cambioNivel = 'mejora'
+        else if ((nivelActualNum as number) < nivelAnterior) cambioNivel = 'empeora'
+        else cambioNivel = 'igual'
+      }
+    }
+    labelCambio =
+      cambioNivel === 'mejora' ? 'Mejoraste'
+      : cambioNivel === 'empeora' ? 'Empeoraste'
+      : 'Te mantuviste'
+  }
+
+  return {
+    header: {
+      materia: headerMateria,
+      fecha: row.fin_at ?? row.inicio_at,
+      nivel: nivelActual,
+      nivelOrden: nivelActualNum,
+      puntaje: puntajeGlobal,
+      escala,
+      tiempo_total_seg: tiempoTotalSeg,
+      correctas,
+      incorrectas: totalPreguntas - correctas,
+      total: totalPreguntas,
+    },
+    resumen: {
+      cambio: cambioNivel,
+      mensaje: labelCambio,
+      nivelActual: nivelActualNum,
+    },
+    preguntas,
+    analisis: {
+      fortalezas,
+      subtemas_a_mejorar,          // nombre esperado por el front
+      mejoras: subtemas_a_mejorar, // compatibilidad hacia atrás
+      recomendaciones,
+     },
+   }
+ }
 }
