@@ -66,7 +66,7 @@ export interface PreguntaTransformada {
 
 const IA_API_URL =
   'https://eduexel-ia-python-generador-preguntas.onrender.com/icfes/generar_pack'
-const IA_TIMEOUT = 60000 // 60 segundos (para permitir que Render despierte)
+const IA_TIMEOUT = 10000 // 10 segundos - Fallback rápido si IA no responde
 
 // ============================================================================
 // SERVICIO
@@ -82,42 +82,38 @@ class IaExternalService {
     estilo_kolb: EstiloKolb
     cantidad: number
   }): Promise<PreguntaTransformada[]> {
-    const maxRetries = 2
-    let lastError: any = null
+    try {
+      console.log('🤖 [IA External] ═══════════════════════════════════════')
+      console.log('[IA External] Llamando API de IA (timeout: 10s):', {
+        url: IA_API_URL,
+        area: params.area,
+        subtema: params.subtema,
+        estilo_kolb: params.estilo_kolb,
+        cantidad: params.cantidad,
+      })
+      console.log('═══════════════════════════════════════════════════════════')
 
-    for (let intento = 1; intento <= maxRetries; intento++) {
-      try {
-        console.log('🤖 [IA External] ═══════════════════════════════════════')
-        console.log(`[IA External] Llamando API de IA (intento ${intento}/${maxRetries}):`, {
-          url: IA_API_URL,
-          area: params.area,
-          subtema: params.subtema,
-          estilo_kolb: params.estilo_kolb,
-          cantidad: params.cantidad,
-        })
-        console.log('═══════════════════════════════════════════════════════════')
+      const requestBody: PreguntaIARequest = {
+        area: params.area,
+        subtema: params.subtema,
+        estilo_kolb: params.estilo_kolb,
+        cantidad: params.cantidad,
+        longitud_min: 200,
+        longitud_max: 350,
+        max_tokens_item: 600,
+        temperatura: 0.2,
+      }
 
-        const requestBody: PreguntaIARequest = {
-          area: params.area,
-          subtema: params.subtema,
-          estilo_kolb: params.estilo_kolb,
-          cantidad: params.cantidad,
-          longitud_min: 200,
-          longitud_max: 350,
-          max_tokens_item: 600,
-          temperatura: 0.2,
+      const response = await axios.post<APIResponse>(
+        `${IA_API_URL}?cantidad=${params.cantidad}`,
+        requestBody,
+        {
+          timeout: IA_TIMEOUT,
+          headers: {
+            'Content-Type': 'application/json',
+          },
         }
-
-        const response = await axios.post<APIResponse>(
-          `${IA_API_URL}?cantidad=${params.cantidad}`,
-          requestBody,
-          {
-            timeout: IA_TIMEOUT,
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          }
-        )
+      )
 
       // Validar respuesta
       if (!response.data || !response.data.ok) {
@@ -128,51 +124,38 @@ class IaExternalService {
         throw new Error('API de IA no devolvió preguntas')
       }
 
-        console.log('═══════════════════════════════════════════════════════════')
-        console.log(`✅ [IA External] API respondió con ${response.data.resultados.length} preguntas`)
-        console.log('═══════════════════════════════════════════════════════════')
+      console.log('═══════════════════════════════════════════════════════════')
+      console.log(`✅ [IA External] API respondió con ${response.data.resultados.length} preguntas`)
+      console.log('═══════════════════════════════════════════════════════════')
 
-        // Transformar preguntas al formato interno
-        const preguntasTransformadas = response.data.resultados.map((pregunta, index) =>
-          this.transformarPreguntaIA(pregunta, index + 1)
-        )
+      // Transformar preguntas al formato interno
+      const preguntasTransformadas = response.data.resultados.map((pregunta, index) =>
+        this.transformarPreguntaIA(pregunta, index + 1)
+      )
 
-        return preguntasTransformadas
-      } catch (error) {
-        lastError = error
-        console.error('❌ [IA External] ═══════════════════════════════════════')
-        
-        if (axios.isAxiosError(error)) {
-          const axiosError = error as AxiosError
-          if (axiosError.code === 'ECONNABORTED') {
-            console.error(`[IA External] ERROR: Timeout al llamar API de IA (${IA_TIMEOUT/1000}s)`)
-          } else if (axiosError.response) {
-            console.error('[IA External] ERROR: API de IA respondió con error:', {
-              status: axiosError.response.status,
-              statusText: axiosError.response.statusText,
-              data: axiosError.response.data,
-            })
-          } else if (axiosError.request) {
-            console.error('[IA External] ERROR: No se pudo conectar con API de IA')
-            console.error('[IA External] URL intentada:', IA_API_URL)
-          }
-        } else {
-          console.error('[IA External] ERROR inesperado:', error)
+      return preguntasTransformadas
+    } catch (error) {
+      console.error('❌ [IA External] ═══════════════════════════════════════')
+      
+      if (axios.isAxiosError(error)) {
+        const axiosError = error as AxiosError
+        if (axiosError.code === 'ECONNABORTED') {
+          console.error(`[IA External] ERROR: Timeout (${IA_TIMEOUT/1000}s) - Usando fallback`)
+        } else if (axiosError.response) {
+          console.error('[IA External] ERROR: API respondió con error:', {
+            status: axiosError.response.status,
+            statusText: axiosError.response.statusText,
+          })
+        } else if (axiosError.request) {
+          console.error('[IA External] ERROR: No se pudo conectar con API de IA')
         }
-        
-        console.error('═══════════════════════════════════════════════════════════')
-        
-        // Si no es el último intento, esperar 2 segundos antes de reintentar
-        if (intento < maxRetries) {
-          console.log(`[IA External] ⏳ Reintentando en 2 segundos...`)
-          await new Promise(resolve => setTimeout(resolve, 2000))
-        }
+      } else {
+        console.error('[IA External] ERROR inesperado:', error)
       }
+      
+      console.error('═══════════════════════════════════════════════════════════')
+      throw error
     }
-
-    // Si llegamos aquí, todos los intentos fallaron
-    console.error('[IA External] ❌ Todos los intentos fallaron, usando fallback')
-    throw lastError
   }
 
   /**
