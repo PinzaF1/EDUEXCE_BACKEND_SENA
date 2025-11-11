@@ -67,7 +67,7 @@ export const SUBTEMAS_API_MAPPER: Record<string, Record<string, string>> = {
   },
 
   // ========== CIENCIAS NATURALES ==========
-  'Ciencias': {
+  'Ciencias Naturales': {
     // Mapeos exactos
     'Indagación científica (variables, control e interpretación de datos)': 'Indagación científica (variables, control e interpretación de datos)',
     'Fuerzas, movimiento y energía': 'Fuerzas, movimiento y energía',
@@ -123,23 +123,34 @@ export const SUBTEMAS_API_MAPPER: Record<string, Record<string, string>> = {
  * @returns Subtema normalizado que acepta la API
  */
 export function mapearSubtema(area: string, subtemaOriginal: string): string {
-  // Normalizar el nombre del área por si viene con mayúsculas/minúsculas diferentes
-  const areaNormalizada = area.toLowerCase()
+  // Normalizar el nombre del área para coincidir con las claves del mapper
+  // sesiones_service.ts normaliza: Ciencias → "Ciencias Naturales", Sociales → "sociales"
+  let areaNormalizada = area
   
-  // Buscar el mapper correspondiente al área
-  let areaMap: Record<string, string> | undefined
+  // Aplicar misma normalización que sesiones_service.ts
+  if (area.toLowerCase().startsWith('cien')) {
+    areaNormalizada = 'Ciencias Naturales'
+  } else if (area.toLowerCase().startsWith('soci')) {
+    areaNormalizada = 'sociales'
+  }
   
-  // Buscar con diferentes variaciones del nombre del área
-  for (const key of Object.keys(SUBTEMAS_API_MAPPER)) {
-    if (key.toLowerCase() === areaNormalizada) {
-      areaMap = SUBTEMAS_API_MAPPER[key]
-      break
+  // Buscar el mapper correspondiente al área (primero exacto, luego case-insensitive)
+  let areaMap: Record<string, string> | undefined = SUBTEMAS_API_MAPPER[areaNormalizada]
+  
+  // Si no se encuentra exacto, buscar case-insensitive
+  if (!areaMap) {
+    const areaLower = areaNormalizada.toLowerCase()
+    for (const key of Object.keys(SUBTEMAS_API_MAPPER)) {
+      if (key.toLowerCase() === areaLower) {
+        areaMap = SUBTEMAS_API_MAPPER[key]
+        break
+      }
     }
   }
   
   // Si no hay mapper para esta área, devolver el subtema original
   if (!areaMap) {
-    console.warn(`[Mapper] No hay mapper para el área: "${area}"`)
+    console.warn(`[Mapper] ⚠️ No hay mapper para el área: "${area}" (normalizada: "${areaNormalizada}")`)
     return subtemaOriginal
   }
   
