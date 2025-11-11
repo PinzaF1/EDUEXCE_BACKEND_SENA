@@ -149,20 +149,12 @@ class MovilController {
     opciones: q.opciones,
   }))
 
+  // ✅ FORMATO CORREGIDO: Compatible con app móvil Android
   return response.created({
     sesion: {
-      idSesion: String(ses.id_sesion),
-      idUsuario: String(ses.id_usuario),
-      tipo: 'practica',
-      area: areaCanon.toLowerCase(),
-      subtema,
-      nivelOrden: Number(p.nivel_orden ?? 1),
-      modo: 'estandar',
-      estiloKolb: estiloKolbName ?? null,
-      inicioAt: ses.inicio_at,
-      totalPreguntas: preguntasOut.length,
-      preguntasPorSubtema: preguntasOut,
-    }
+      idSesion: Number(ses.id_sesion)  // ✅ Integer, no String
+    },
+    preguntas: preguntasOut  // ✅ Array en raíz, no dentro de sesion
   })
 }
 
