@@ -677,31 +677,40 @@ public async ProgresoDiagnostico(
       ? ('sociales' as AreaUI)
       : (area as AreaUI);
 
+  console.log('═══════════════════════════════════════════════════════════')
+  console.log(`[crearParada] INICIO - Usuario: ${d.id_usuario}`)
+  console.log(`[crearParada] Área: ${area} → ${areaUI}`)
+  console.log(`[crearParada] Subtema: ${subtema}`)
+  console.log(`[crearParada] Nivel: ${d.nivel_orden}`)
+  console.log('═══════════════════════════════════════════════════════════')
+
   // ========== INTEGRACIÓN CON API DE IA ==========
   let preguntasIA: any[] = []
   let usandoIA = false
   let preguntasGeneradasJSONB: any = null
 
   // 1) Intentar generar preguntas con API de IA
-  if (estilo_kolb) {
-    try {
-      console.log('[crearParada] Intentando generar preguntas con API de IA...')
-      const preguntasTransformadas = await IaExternalService.generarPreguntasIA({
-        area: areaUI,
-        subtema,
-        estilo_kolb,
-        cantidad: 5,
-      })
+  // NOTA: El estilo Kolb es OPCIONAL y completamente independiente del sistema de niveles
+  // Si no hay estilo Kolb, la API de IA genera preguntas genéricas sin adaptación
+  const estiloParaIA = estilo_kolb || 'Asimilador'  // Fallback solo para compatibilidad con API
+  
+  try {
+    console.log(`[crearParada] 🤖 Intentando generar preguntas con API de IA...`)
+    const preguntasTransformadas = await IaExternalService.generarPreguntasIA({
+      area: areaUI,
+      subtema,
+      estilo_kolb: estiloParaIA,
+      cantidad: 5,
+    })
 
-      if (preguntasTransformadas && preguntasTransformadas.length > 0) {
-        console.log(`[crearParada] API de IA generó ${preguntasTransformadas.length} preguntas`)
-        preguntasIA = IaExternalService.prepararParaMovil(preguntasTransformadas)
-        preguntasGeneradasJSONB = IaExternalService.prepararParaJSONB(preguntasTransformadas)
-        usandoIA = true
-      }
-    } catch (error) {
-      console.error('[crearParada] Error al llamar API de IA, usando fallback a BD local:', error)
+    if (preguntasTransformadas && preguntasTransformadas.length > 0) {
+      console.log(`[crearParada] ✅ API de IA generó ${preguntasTransformadas.length} preguntas`)
+      preguntasIA = IaExternalService.prepararParaMovil(preguntasTransformadas)
+      preguntasGeneradasJSONB = IaExternalService.prepararParaJSONB(preguntasTransformadas)
+      usandoIA = true
     }
+  } catch (error) {
+    console.error('[crearParada] ❌ Error al llamar API de IA, usando fallback a BD local:', error)
   }
 
   // 2) Fallback: Si API de IA falló o no hay estilo Kolb, usar BD local
@@ -784,6 +793,14 @@ public async ProgresoDiagnostico(
         enunciado: p.pregunta,
         opciones: fmtOpciones(p.opciones),
       }))
+
+  console.log('═══════════════════════════════════════════════════════════')
+  console.log(`[crearParada] RESULTADO FINAL:`)
+  console.log(`[crearParada] Sesión ID: ${id_sesion}`)
+  console.log(`[crearParada] Usando IA: ${usandoIA ? '✅ SÍ' : '❌ NO (banco local)'}`)
+  console.log(`[crearParada] Total preguntas: ${preguntasParaMovil.length}`)
+  console.log(`[crearParada] Primer pregunta id_pregunta: ${preguntasParaMovil[0]?.id_pregunta ?? 'null'}`)
+  console.log('═══════════════════════════════════════════════════════════')
 
   return {
     sesion,

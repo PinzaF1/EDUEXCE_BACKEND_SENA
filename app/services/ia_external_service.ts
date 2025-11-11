@@ -83,12 +83,15 @@ class IaExternalService {
     cantidad: number
   }): Promise<PreguntaTransformada[]> {
     try {
+      console.log('🤖 [IA External] ═══════════════════════════════════════')
       console.log('[IA External] Llamando API de IA:', {
+        url: IA_API_URL,
         area: params.area,
         subtema: params.subtema,
         estilo_kolb: params.estilo_kolb,
         cantidad: params.cantidad,
       })
+      console.log('═══════════════════════════════════════════════════════════')
 
       const requestBody: PreguntaIARequest = {
         area: params.area,
@@ -121,9 +124,9 @@ class IaExternalService {
         throw new Error('API de IA no devolvió preguntas')
       }
 
-      console.log(
-        `[IA External] API respondió con ${response.data.resultados.length} preguntas`
-      )
+      console.log('═══════════════════════════════════════════════════════════')
+      console.log(`✅ [IA External] API respondió con ${response.data.resultados.length} preguntas`)
+      console.log('═══════════════════════════════════════════════════════════')
 
       // Transformar preguntas al formato interno
       const preguntasTransformadas = response.data.resultados.map((pregunta, index) =>
@@ -132,28 +135,35 @@ class IaExternalService {
 
       return preguntasTransformadas
     } catch (error) {
+      console.error('❌ [IA External] ═══════════════════════════════════════')
       if (axios.isAxiosError(error)) {
         const axiosError = error as AxiosError
         if (axiosError.code === 'ECONNABORTED') {
-          console.error('[IA External] Timeout al llamar API de IA')
+          console.error('[IA External] ERROR: Timeout al llamar API de IA (15s)')
+          console.error('═══════════════════════════════════════════════════════════')
           throw new Error('Timeout al llamar API de IA (15s)')
         }
         if (axiosError.response) {
-          console.error('[IA External] API de IA respondió con error:', {
+          console.error('[IA External] ERROR: API de IA respondió con error:', {
             status: axiosError.response.status,
+            statusText: axiosError.response.statusText,
             data: axiosError.response.data,
           })
+          console.error('═══════════════════════════════════════════════════════════')
           throw new Error(
             `API de IA respondió con error ${axiosError.response.status}`
           )
         }
         if (axiosError.request) {
-          console.error('[IA External] No se pudo conectar con API de IA')
+          console.error('[IA External] ERROR: No se pudo conectar con API de IA')
+          console.error('[IA External] URL intentada:', IA_API_URL)
+          console.error('═══════════════════════════════════════════════════════════')
           throw new Error('No se pudo conectar con API de IA')
         }
       }
 
-      console.error('[IA External] Error inesperado:', error)
+      console.error('[IA External] ERROR inesperado:', error)
+      console.error('═══════════════════════════════════════════════════════════')
       throw error
     }
   }
