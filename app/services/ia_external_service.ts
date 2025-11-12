@@ -66,7 +66,7 @@ export interface PreguntaTransformada {
 
 const IA_API_URL =
   'https://eduexel-ia-python-generador-preguntas.onrender.com/icfes/generar_pack'
-const IA_TIMEOUT = 15000 // 15 segundos
+const IA_TIMEOUT = 10000 // 10 segundos - Fallback rápido si IA no responde
 
 // ============================================================================
 // SERVICIO
@@ -83,12 +83,15 @@ class IaExternalService {
     cantidad: number
   }): Promise<PreguntaTransformada[]> {
     try {
-      console.log('[IA External] Llamando API de IA:', {
+      console.log('🤖 [IA External] ═══════════════════════════════════════')
+      console.log('[IA External] Llamando API de IA (timeout: 10s):', {
+        url: IA_API_URL,
         area: params.area,
         subtema: params.subtema,
         estilo_kolb: params.estilo_kolb,
         cantidad: params.cantidad,
       })
+      console.log('═══════════════════════════════════════════════════════════')
 
       const requestBody: PreguntaIARequest = {
         area: params.area,
@@ -113,17 +116,25 @@ class IaExternalService {
       )
 
       // Validar respuesta
+      console.log('[IA External] 🔍 Validando respuesta de API...')
+      console.log('[IA External] response.data:', JSON.stringify(response.data, null, 2))
+      
       if (!response.data || !response.data.ok) {
-        throw new Error('API de IA devolvió ok=false')
+        console.error('[IA External] ❌ VALIDACIÓN FALLÓ: API devolvió ok=false o sin data')
+        console.error('[IA External] response.data.ok:', response.data?.ok)
+        console.error('[IA External] response.data.errores:', response.data?.errores)
+        throw new Error(`API de IA devolvió ok=false: ${JSON.stringify(response.data?.errores || 'sin detalles')}`)
       }
 
       if (!Array.isArray(response.data.resultados) || response.data.resultados.length === 0) {
+        console.error('[IA External] ❌ VALIDACIÓN FALLÓ: Sin resultados')
+        console.error('[IA External] resultados:', response.data.resultados)
         throw new Error('API de IA no devolvió preguntas')
       }
 
-      console.log(
-        `[IA External] API respondió con ${response.data.resultados.length} preguntas`
-      )
+      console.log('═══════════════════════════════════════════════════════════')
+      console.log(`✅ [IA External] VALIDACIÓN EXITOSA: API respondió con ${response.data.resultados.length} preguntas`)
+      console.log('═══════════════════════════════════════════════════════════')
 
       // Transformar preguntas al formato interno
       const preguntasTransformadas = response.data.resultados.map((pregunta, index) =>
@@ -132,28 +143,32 @@ class IaExternalService {
 
       return preguntasTransformadas
     } catch (error) {
+      console.error('❌ [IA External] ═══════════════════════════════════════')
+      console.error('[IA External] 🚨 CAPTURADO ERROR EN CATCH')
+      
       if (axios.isAxiosError(error)) {
         const axiosError = error as AxiosError
         if (axiosError.code === 'ECONNABORTED') {
-          console.error('[IA External] Timeout al llamar API de IA')
-          throw new Error('Timeout al llamar API de IA (15s)')
-        }
-        if (axiosError.response) {
-          console.error('[IA External] API de IA respondió con error:', {
+          console.error(`[IA External] TIPO ERROR: Timeout (${IA_TIMEOUT/1000}s) - Usando fallback`)
+        } else if (axiosError.response) {
+          console.error('[IA External] TIPO ERROR: API respondió con HTTP error:', {
             status: axiosError.response.status,
-            data: axiosError.response.data,
+            statusText: axiosError.response.statusText,
+            data: axiosError.response.data
           })
-          throw new Error(
-            `API de IA respondió con error ${axiosError.response.status}`
-          )
+        } else if (axiosError.request) {
+          console.error('[IA External] TIPO ERROR: No se pudo conectar con API de IA (sin respuesta)')
         }
-        if (axiosError.request) {
-          console.error('[IA External] No se pudo conectar con API de IA')
-          throw new Error('No se pudo conectar con API de IA')
+      } else {
+        console.error('[IA External] TIPO ERROR: Error inesperado (no axios)')
+        console.error('[IA External] Error completo:', error)
+        if (error instanceof Error) {
+          console.error('[IA External] Error.message:', error.message)
+          console.error('[IA External] Error.stack:', error.stack)
         }
       }
-
-      console.error('[IA External] Error inesperado:', error)
+      
+      console.error('═══════════════════════════════════════════════════════════')
       throw error
     }
   }
