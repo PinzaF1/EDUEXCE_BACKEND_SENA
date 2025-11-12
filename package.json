@@ -72,6 +72,7 @@
     "jsonwebtoken": "^9.0.2",
     "luxon": "^3.7.1",
     "nodemailer": "^7.0.6",
+    "openai": "^6.8.1",
     "pg": "^8.16.3",
     "phc-argon2": "^1.1.4",
     "react-router-dom": "^7.8.0",
