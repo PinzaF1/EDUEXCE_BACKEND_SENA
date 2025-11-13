@@ -7,7 +7,10 @@ import RankingService from '../services/ranking_service.js'
 import LogrosService from '../services/logros_service.js'
 import RetosService from '../services/retos_service.js'
 import EstudiantesService from '../services/estudiantes_service.js'
-import FcmService from '../services/fcm_service.js'
+import SincronizacionService from '../services/sincronizacion_service.js'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import app from '@adonisjs/core/services/app'
 
 const estudiantesService = new EstudiantesService()
 const kolbService = new KolbService()
@@ -16,6 +19,7 @@ const progresoService = new ProgresoService()
 const rankingService = new RankingService()
 const logrosService = new LogrosService()
 const retosService = new RetosService()
+const sincronizacionService = new SincronizacionService()
 
 class MovilController {
   // ================= PERFIL =================
@@ -65,12 +69,32 @@ class MovilController {
       const auth = (request as any).authUsuario
       const res = await kolbService.obtenerResultado(Number(auth.id_usuario))
       if (!res) return response.notFound({ error: 'Sin resultado de Kolb' })
+      
+      // Verificar que tenga estilo calculado
+      const estiloRel = (res as any).estilo || {}
+      const estiloCalculado = (res as any).totales?.estiloCalculado || null
+      const estiloFinal = estiloRel.estilo || estiloCalculado
+      
+      if (!estiloFinal) {
+        // Si no hay estilo, puede ser que el JSON esté corrupto
+        console.error('Error: No se pudo determinar el estilo de aprendizaje para usuario', auth.id_usuario)
+        return response.status(500).json({ error: 'Error al procesar el resultado del test de Kolb' })
+      }
+      
+      // Android espera un objeto "estilo" anidado con la estructura específica
+      // Retornar la estructura que espera el modelo de Android
       return response.ok({
         estudiante: `${res.alumno?.nombre ?? ''} ${res.alumno?.apellido ?? ''}`.trim(),
         documento: res.alumno?.numero_documento ?? null,
         fecha: res.fecha_presentacion,
-        estilo: res.estilo,
-        totales: res.totales, 
+        estilo: {
+          idEstilosAprendizajes: estiloRel.id_estilos_aprendizajes || estiloRel.idEstilosAprendizajes || null,
+          estilo: estiloFinal,
+          descripcion: estiloRel.descripcion || null,
+          caracteristicas: estiloRel.caracteristicas || null,
+          recomendaciones: estiloRel.recomendaciones || null,
+        },
+        totales: res.totales || {}, 
       })
     }
 
@@ -566,6 +590,38 @@ public async progresoHistorialDetalle({ request, response }: HttpContext) {
       }
     }
 
+    /** POST /movil/retos/:id_reto/rechazar */
+    public async rechazarReto({ request, response }: HttpContext) {
+      try {
+        const auth = (request as any).authUsuario
+        const idReto = Number(request.param('id_reto'))
+        if (!Number.isFinite(idReto)) {
+          return response.badRequest({ message: 'id_reto inválido' })
+        }
+
+        const data = await retosService.rechazarReto(idReto, Number(auth.id_usuario))
+        return response.ok(data)
+      } catch (err: any) {
+        return response.internalServerError({ message: err?.message || 'Error al rechazar el reto' })
+      }
+    }
+
+    /** DELETE /movil/retos/:id_reto/abandonar */
+    public async abandonarReto({ request, response }: HttpContext) {
+      try {
+        const auth = (request as any).authUsuario
+        const idReto = Number(request.param('id_reto'))
+        if (!Number.isFinite(idReto)) {
+          return response.badRequest({ message: 'id_reto inválido' })
+        }
+
+        const data = await retosService.abandonarReto(idReto, Number(auth.id_usuario))
+        return response.ok(data)
+      } catch (err: any) {
+        return response.internalServerError({ message: err?.message || 'Error al abandonar el reto' })
+      }
+    }
+
     /** GET /movil/retos/:id_reto/arranque */
     public async arranqueReto({ request, response }: HttpContext) {
       try {
@@ -632,6 +688,109 @@ public async quizInicialProgreso({ request, response }: HttpContext) {
   return response.ok(data);
 }
 
+  // ===== SINCRONIZACIÓN: Obtener niveles desbloqueados y vidas =====
+  public async obtenerProgresoSincronizacion({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      
+      // Extraer id_usuario del token (misma estrategia que perfilDesdeToken)
+      const idUsuario = auth?.id_usuario ?? auth?.id ?? auth?.user_id ?? auth?.userId
+      if (!idUsuario) {
+        return response.unauthorized({ error: 'Token sin identificador de usuario' })
+      }
+      
+      const id_usuario = Number(idUsuario)
+      const niveles = await sincronizacionService.obtenerNivelesDesbloqueados(id_usuario)
+      const vidas = await sincronizacionService.obtenerVidas(id_usuario)
+
+      return response.ok({ niveles, vidas })
+    } catch (e: any) {
+      return response.badRequest({ error: e?.message || 'Error al obtener progreso' })
+    }
+  }
+
+  // ===== SINCRONIZACIÓN: Actualizar nivel desbloqueado =====
+  public async actualizarNivelDesbloqueado({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const { area, nivel } = request.only(['area', 'nivel']) as any
+
+      if (!area || nivel == null) {
+        return response.badRequest({ error: 'area y nivel son obligatorios' })
+      }
+
+      // Extraer id_usuario del token (misma estrategia que perfilDesdeToken)
+      const idUsuario = auth?.id_usuario ?? auth?.id ?? auth?.user_id ?? auth?.userId
+      if (!idUsuario) {
+        return response.unauthorized({ error: 'Token sin identificador de usuario' })
+      }
+
+      await sincronizacionService.actualizarNivelDesbloqueado(
+        Number(idUsuario),
+        String(area),
+        Number(nivel)
+      )
+
+      return response.ok({ success: true })
+    } catch (e: any) {
+      return response.badRequest({ error: e?.message || 'Error al actualizar nivel' })
+    }
+  }
+
+  // ===== SINCRONIZACIÓN: Actualizar vidas =====
+  public async actualizarVidas({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const { area, nivel, vidas } = request.only(['area', 'nivel', 'vidas']) as any
+
+      if (!area || nivel == null || vidas == null) {
+        return response.badRequest({ error: 'area, nivel y vidas son obligatorios' })
+      }
+
+      // Extraer id_usuario del token (misma estrategia que perfilDesdeToken)
+      const idUsuario = auth?.id_usuario ?? auth?.id ?? auth?.user_id ?? auth?.userId
+      if (!idUsuario) {
+        return response.unauthorized({ error: 'Token sin identificador de usuario' })
+      }
+
+      await sincronizacionService.actualizarVidas(
+        Number(idUsuario),
+        String(area),
+        Number(nivel),
+        Number(vidas)
+      )
+
+      return response.ok({ success: true })
+    } catch (e: any) {
+      return response.badRequest({ error: e?.message || 'Error al actualizar vidas' })
+    }
+  }
+
+  // ===== SINCRONIZACIÓN: Sincronizar todo (niveles + vidas) =====
+  public async sincronizarProgreso({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      
+      // Extraer id_usuario del token (misma estrategia que perfilDesdeToken)
+      const idUsuario = auth?.id_usuario ?? auth?.id ?? auth?.user_id ?? auth?.userId
+      if (!idUsuario) {
+        return response.unauthorized({ error: 'Token sin identificador de usuario' })
+      }
+      
+      const { niveles, vidas } = request.only(['niveles', 'vidas']) as any
+
+      await sincronizacionService.sincronizarTodo(
+        Number(idUsuario),
+        niveles || {},
+        vidas || {}
+      )
+
+      return response.ok({ success: true })
+    } catch (e: any) {
+      return response.badRequest({ error: e?.message || 'Error al sincronizar progreso' })
+    }
+  }
+
 
 
 
@@ -683,38 +842,66 @@ public async editarMiPerfilContacto({ request, response }: HttpContext) {
   }
 }
 
-  // ================= FCM TOKEN =================
-  /**
-   * POST /movil/fcm-token
-   * Registra el token FCM del dispositivo móvil
-   */
-  public async registrarFcmToken({ request, response }: HttpContext) {
+  // ================= SUBIR FOTO DE PERFIL =================
+  public async subirFotoPerfil({ request, response }: HttpContext) {
     try {
       const auth = (request as any).authUsuario
-      const { token, device_id, platform } = request.only(['token', 'device_id', 'platform'])
-
-      if (!token) {
-        return response.badRequest({ message: 'Token FCM es requerido' })
+      if (!auth || !auth.id_usuario) {
+        return response.unauthorized({ error: 'No autenticado' })
       }
 
-      const fcmService = new FcmService()
-
-      await fcmService.registrarToken(
-        Number(auth.id_usuario),
-        token,
-        device_id || null,
-        platform || 'android'
-      )
-
-      return response.ok({
-        message: 'Token FCM registrado exitosamente',
-        success: true,
+      // Obtener el archivo de la petición
+      const foto = request.file('foto', {
+        size: '5mb',
+        extnames: ['jpg', 'jpeg', 'png', 'webp']
       })
-    } catch (error) {
-      console.error('Error al registrar token FCM:', error)
-      return response.internalServerError({
-        message: 'Error al registrar token FCM',
-        error: (error as Error).message,
+
+      if (!foto) {
+        return response.badRequest({ error: 'No se envió ningún archivo. Usa el campo "foto"' })
+      }
+
+      if (!foto.isValid) {
+        return response.badRequest({ 
+          error: 'Archivo inválido', 
+          detalle: foto.errors 
+        })
+      }
+
+      if (!foto.tmpPath) {
+        return response.badRequest({ error: 'No se pudo leer el archivo temporal' })
+      }
+
+      // Crear directorio de uploads si no existe
+      const uploadsDir = app.makePath('public', 'uploads', 'fotos')
+      await fs.mkdir(uploadsDir, { recursive: true })
+
+      // Generar nombre único para el archivo
+      const userId = Number(auth.id_usuario)
+      const ext = foto.extname || 'jpg'
+      const fileName = `foto_${userId}_${Date.now()}.${ext}`
+      const filePath = path.join(uploadsDir, fileName)
+
+      // Copiar archivo desde tmp a la carpeta de uploads
+      await fs.copyFile(foto.tmpPath, filePath)
+
+      // Generar URL pública de la foto
+      // En producción, usar la URL del servidor
+      const baseUrl = process.env.APP_URL || process.env.HOST || 'http://localhost:3333'
+      const fotoUrl = `${baseUrl.replace(/\/$/, '')}/uploads/fotos/${fileName}`
+
+      // Actualizar foto_url en la base de datos
+      await estudiantesService.actualizarContacto(userId, {
+        foto_url: fotoUrl
+      })
+
+      return response.ok({ 
+        foto_url: fotoUrl,
+        message: 'Foto subida correctamente'
+      })
+    } catch (e: any) {
+      console.error('Error al subir foto:', e)
+      return response.badRequest({ 
+        error: e?.message || 'No se pudo subir la foto' 
       })
     }
   }

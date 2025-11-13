@@ -30,6 +30,52 @@ const canonArea = (s?: string | null): Area | null => {
   return null
 }
 
+// Mapeo de niveles a subtemas por área (según el orden definido en ia_service.ts)
+const SUBTEMAS_POR_AREA: Record<Area, string[]> = {
+  Matematicas: [
+    'Operaciones con números enteros',
+    'Razones y proporciones',
+    'Regla de tres simple y compuesta',
+    'Porcentajes y tasas (aumento, descuento, interés simple)',
+    'Ecuaciones lineales y sistemas 2×2',
+  ],
+  Lenguaje: [
+    'Comprensión lectora (sentido global y local)',
+    'Conectores lógicos (causa, contraste, condición, secuencia)',
+    'Identificación de argumentos y contraargumentos',
+    'Idea principal y propósito comunicativo',
+    'Hecho vs. opinión e inferencias',
+  ],
+  Ciencias: [
+    'Indagación científica (variables, control e interpretación de datos)',
+    'Fuerzas, movimiento y energía',
+    'Materia y cambios (mezclas, reacciones y conservación)',
+    'Genética y herencia',
+    'Ecosistemas y cambio climático (CTS)',
+  ],
+  sociales: [
+    'Constitución de 1991 y organización del Estado',
+    'Historia de Colombia (Frente Nacional, conflicto y paz)',
+    'Guerras Mundiales y Guerra Fría',
+    'Geografía de Colombia (mapas, territorio y ambiente)',
+    'Economía y ciudadanía económica (globalización y desigualdad)',
+  ],
+  Ingles: [
+    'Verb to be (am, is, are)',
+    'Present Simple (afirmación, negación y preguntas)',
+    'Past Simple (verbos regulares e irregulares)',
+    'Comparatives and superlatives',
+    'Subject/Object pronouns y possessive adjectives',
+  ],
+}
+
+// Obtener el subtema correcto para un nivel específico de un área
+function obtenerSubtemaPorNivel(area: Area, nivel: number): string | null {
+  const subtemas = SUBTEMAS_POR_AREA[area]
+  if (!subtemas || nivel < 1 || nivel > subtemas.length) return null
+  return subtemas[nivel - 1] // Los niveles son 1-indexed, el array es 0-indexed
+}
+
 function safeOpcCount(raw: any, fallback = 4): number {
   try {
     if (Array.isArray(raw)) return Math.max(2, Math.min(6, raw.length))
@@ -131,37 +177,238 @@ async function upsertProgresoNivel(opts: {
   subtema: string
   nivel_orden?: number | null
   preguntas_por_intento?: number | null
+  correctas?: number | null
+  puntaje?: number | null
+  aprueba?: boolean | null
+  id_sesion?: number | null
 }) {
+  console.log(`[upsertProgresoNivel] === INICIO ===`)
+  console.log(`[upsertProgresoNivel] Parámetros recibidos:`, {
+    id_usuario: opts.id_usuario,
+    area_original: opts.area,
+    subtema: opts.subtema,
+    nivel_orden: opts.nivel_orden,
+    correctas: opts.correctas,
+    puntaje: opts.puntaje,
+    aprueba: opts.aprueba,
+  })
+  
   const { id_usuario } = opts
   const area = canonArea(opts.area)
   const subtema = String(opts.subtema || '').trim()
-  if (!area || !subtema) return
+  
+  console.log(`[upsertProgresoNivel] Después de canonizar: area="${area}", subtema="${subtema}"`)
+  
+  if (!area || !subtema) {
+    console.error(`[upsertProgresoNivel] ERROR: area o subtema vacíos. area="${area}", subtema="${subtema}"`)
+    return
+  }
 
-  const nivel = Number.isFinite(Number(opts.nivel_orden)) ? Number(opts.nivel_orden) : 1
+  // Aceptar nivel_orden tal cual viene de la sesión
+  // Si es 0 (diagnóstico antiguo), convertir a 8
+  // Si no viene o es null, usar 1 como default solo para práctica
+  let nivel = Number.isFinite(Number(opts.nivel_orden)) ? Number(opts.nivel_orden) : 1
+  if (nivel === 0) nivel = 8 // Diagnóstico antiguo con nivel_orden 0 -> convertir a 8
+  
   const preguntas = Number.isFinite(Number(opts.preguntas_por_intento))
     ? Number(opts.preguntas_por_intento)
     : 5
 
-  const payload = { id_usuario, area, subtema, nivel_orden: nivel, preguntas_por_intento: preguntas }
+  // Calcular estado basado en si aprueba o no
+  // Si aprueba no viene, calcular basado en correctas >= 4
+  let aprueba = opts.aprueba
+  if (aprueba === null || aprueba === undefined) {
+    aprueba = (opts.correctas ?? 0) >= 4
+  }
+  
+  // CRÍTICO: Todos los niveles deben finalizarse cuando se cierra la sesión
+  // No debe haber estados 'en_curso' o 'pendiente' después de cerrar sesión
+  // Estado: 'superado' si aprueba, 'finalizado' si no aprueba (pero completó la sesión)
+  let estado: 'pendiente' | 'en_curso' | 'superado' | 'finalizado' = 'finalizado'
+  if (aprueba === true) {
+    estado = 'superado'
+  } else {
+    // Si no aprueba, el nivel está finalizado (no 'en_curso')
+    // 'finalizado' indica que completó el intento pero no aprobó
+    estado = 'finalizado'
+  }
 
+  // Asegurar que ultimo_resultado NUNCA sea null si hay puntaje disponible
+  // Si opts.puntaje es null pero hay correctas, calcular el puntaje
+  let ultimoResultado: number | null = null
+  if (opts.puntaje != null && Number.isFinite(Number(opts.puntaje))) {
+    ultimoResultado = Number(opts.puntaje)
+  } else if (opts.correctas != null && Number.isFinite(Number(opts.correctas)) && preguntas > 0) {
+    // Calcular puntaje basado en correctas y total de preguntas
+    ultimoResultado = Math.round((Number(opts.correctas) * 100) / preguntas)
+  }
+
+  // Si aprueba, marcar nivel actual como 'superado' y siguiente como 'en_curso'
+  const nivelSiguiente = aprueba === true ? nivel + 1 : null
+
+  // IMPORTANTE: Siempre crear un NUEVO registro, nunca actualizar uno existente
+  // Cada vez que se completa un nivel, se crea un nuevo registro en progreso_nivel
+  const subtemaNormalizado = subtema.trim()
+  
+  console.log(`[upsertProgresoNivel] Creando NUEVO registro (historial): area="${area}", subtema="${subtemaNormalizado}", nivel=${nivel}, estado="${estado}"`)
+  
   try {
-    const existing = await ProgresoNivel.query()
+    // CRÍTICO: Contar SOLO los intentos FALLIDOS reales (estado = 'finalizado')
+    // NO contar registros 'en_curso' (recién desbloqueados que aún no han sido intentados)
+    // NO contar registros 'superado' (niveles aprobados)
+    // Solo contar registros 'finalizado' (intentos fallidos reales)
+    const registrosFallidos = await ProgresoNivel.query()
       .where('id_usuario', id_usuario)
       .andWhere('area', area)
-      .andWhere('subtema', subtema)
-      .first()
-    if (existing) await (existing as any).merge(payload as any).save()
-    else await ProgresoNivel.create(payload as any)
-  } catch {
-    try {
-      await ProgresoNivel.query()
-        .where('id_usuario', id_usuario)
-        .andWhere('area', area)
-        .andWhere('subtema', subtema)
-        .update(payload as any)
-    } catch {}
+      .andWhere('nivel_orden', nivel)
+      .where('estado', 'finalizado') // SOLO contar intentos fallidos reales (estado = 'finalizado')
+      .exec()
+    
+    // El número de intento es la cantidad de intentos FALLIDOS + 1 si este también falla, o 0 si aprueba
+    const intentosFallidos = Array.isArray(registrosFallidos) ? registrosFallidos.length : 0
+    const numeroIntento = aprueba ? 0 : intentosFallidos + 1 // Si aprueba, no cuenta como intento fallido
+    
+    console.log(`[upsertProgresoNivel] Intentos fallidos previos para nivel ${nivel}: ${intentosFallidos}`)
+    console.log(`[upsertProgresoNivel] Este será el intento #${numeroIntento} para este nivel (aprueba: ${aprueba})`)
+    
+    // Calcular vidas actuales basándose en intentos FALLIDOS
+    // Para niveles 2-6: vidas_actuales = max_intentos_antes_retroceso - intentos_fallidos
+    // Si llega a 3 intentos fallidos, retrocede de nivel (vidas = 0)
+    // Para nivel 1: siempre tiene 3 vidas (sin límite)
+    const maxIntentos = 3
+    let vidasActuales = maxIntentos
+    let ultimaRecarga = null as DateTime | null
+    const ahora = DateTime.now()
+    
+    if (nivel > 1 && nivel <= 6) {
+      if (aprueba) {
+        // Si aprueba, el nivel actual queda superado con todas las vidas (no aplica)
+        // Pero el siguiente nivel inicia con 3 vidas
+        vidasActuales = maxIntentos // Por si acaso, aunque no debería usarse
+      } else {
+        // Si no aprueba, calcular vidas restantes basándose en intentos FALLIDOS
+        // Este nuevo intento fallido cuenta como la pérdida de una vida
+        const intentosTotales = intentosFallidos + 1 // +1 porque este es un nuevo intento fallido
+        
+        // Si llega a 3 intentos fallidos, no tiene vidas (0) y retrocede de nivel
+        if (intentosTotales >= maxIntentos) {
+          vidasActuales = 0
+          // Cuando pierde todas las vidas, marcar ultima_recarga para el momento de la pérdida
+          ultimaRecarga = ahora
+        } else {
+          // Vidas restantes = maxIntentos - intentosTotales
+          vidasActuales = Math.max(0, maxIntentos - intentosTotales)
+          // Si perdió una vida, marcar ultima_recarga para iniciar el timer de 5 minutos
+          if (intentosTotales > 0) {
+            ultimaRecarga = ahora
+          }
+        }
+      }
+    }
+    
+    console.log(`[upsertProgresoNivel] Vidas calculadas: ${vidasActuales} (intentos fallidos: ${intentosFallidos}, total: ${intentosFallidos + (aprueba ? 0 : 1)}, aprueba: ${aprueba})`)
+    
+    const nuevoRegistro = await ProgresoNivel.create({
+      id_usuario,
+      area,
+      subtema: subtemaNormalizado,
+      nivel_orden: nivel,
+      preguntas_por_intento: preguntas,
+      aciertos_minimos: 4,
+      max_intentos_antes_retroceso: maxIntentos,
+      estado,
+      intentos: intentosFallidos + (aprueba ? 0 : 1), // Contar intentos FALLIDOS (si aprueba, no cuenta como fallido)
+      vidas_actuales: vidasActuales, // Vidas restantes (0-3)
+      ultima_recarga: ultimaRecarga, // Timestamp de cuando se perdió la última vida (inicia timer de 5 min)
+      ultima_lectura_detalle: null, // Se inicializa como null, se actualiza cuando lee el detalle
+      ultimo_resultado: ultimoResultado,
+      ultima_vez: DateTime.now(),
+      id_sesion: opts.id_sesion || null, // Vincular con la sesión que generó este progreso
+    } as any)
+    
+    console.log(`[upsertProgresoNivel] ✓ Nuevo registro creado exitosamente: id_progreso=${(nuevoRegistro as any).id_progreso}, nivel_orden=${nivel}, subtema="${subtemaNormalizado}", intento=${numeroIntento}`)
+    
+    // CRÍTICO: Si llega a 3 intentos fallidos en niveles 2-6, retroceder de nivel
+    // Los intentos fallidos = intentosTotales (intentosFallidos + 1 si no aprueba)
+    if (nivel > 1 && nivel <= 6 && !aprueba) {
+      const intentosTotales = intentosFallidos + 1
+      if (intentosTotales >= maxIntentos) {
+        console.log(`[upsertProgresoNivel] ⚠ Usuario llegó a ${intentosTotales} intentos fallidos en nivel ${nivel}. Debe retroceder de nivel.`)
+        // NOTA: El retroceso de nivel se maneja en Android mediante ProgressLockManager
+        // El backend solo marca que el nivel está finalizado con 0 vidas
+        // Android debe detectar vidas = 0 y retroceder automáticamente
+      }
+    }
+  } catch (err: any) {
+    // Si falla por constraint único, significa que el constraint aún existe
+    // En ese caso, necesitamos modificar el constraint o usar un enfoque diferente
+    if (err?.code === '23505' || err?.message?.includes('unique')) {
+      console.error(`[upsertProgresoNivel] ✗ ERROR: Constraint único detectado. El constraint único debe ser modificado para permitir múltiples registros del mismo nivel.`)
+      console.error(`[upsertProgresoNivel] Constraint actual: (id_usuario, area, subtema, nivel_orden)`)
+      console.error(`[upsertProgresoNivel] Para permitir múltiples registros, el constraint debe ser removido o modificado para incluir un campo único (como id_progreso o ultima_vez)`)
+      console.error(`[upsertProgresoNivel] Error:`, err?.message || err)
+    } else {
+      console.error(`[upsertProgresoNivel] ✗ Error al crear registro:`, err?.message || err)
+    }
   }
+
+    // Si aprueba, crear un nuevo registro para el siguiente nivel como 'en_curso'
+    if (aprueba === true && nivelSiguiente && nivelSiguiente <= 5) {
+      console.log(`[upsertProgresoNivel] === CREANDO SIGUIENTE NIVEL ===`)
+      console.log(`[upsertProgresoNivel] id_usuario: ${id_usuario}, area: "${area}", nivel actual: ${nivel}, nivel siguiente: ${nivelSiguiente}`)
+      
+      // Obtener el subtema CORRECTO para el siguiente nivel según el área
+      const subtemaSiguiente = obtenerSubtemaPorNivel(area, nivelSiguiente)
+      const subtemaSiguienteNormalizado = subtemaSiguiente ? subtemaSiguiente.trim() : null
+      
+      console.log(`[upsertProgresoNivel] subtemaSiguiente obtenido: "${subtemaSiguiente}", normalizado: "${subtemaSiguienteNormalizado}"`)
+      
+      if (!subtemaSiguienteNormalizado) {
+        console.error(`[upsertProgresoNivel] ERROR: No se encontró subtema para área "${area}", nivel ${nivelSiguiente}`)
+        console.error(`[upsertProgresoNivel] Área recibida: "${area}", tipo: ${typeof area}`)
+        console.error(`[upsertProgresoNivel] SUBTEMAS_POR_AREA disponible para: ${Object.keys(SUBTEMAS_POR_AREA).join(', ')}`)
+      } else {
+        // IMPORTANTE: Siempre crear un NUEVO registro para el siguiente nivel, nunca actualizar
+        // Al desbloquear un nivel nuevo, inicia con 0 intentos fallidos y 3 vidas
+        console.log(`[upsertProgresoNivel] Creando NUEVO registro para nivel ${nivelSiguiente} (nivel desbloqueado)`)
+        
+        try {
+          // Al crear el siguiente nivel después de aprobar, inicia con 3 vidas y 0 intentos
+          const nuevoRegistroSiguiente = await ProgresoNivel.create({
+            id_usuario,
+            area,
+            subtema: subtemaSiguienteNormalizado,
+            nivel_orden: nivelSiguiente,
+            preguntas_por_intento: preguntas,
+            aciertos_minimos: 4,
+            max_intentos_antes_retroceso: 3,
+            estado: 'en_curso', // Solo este estado puede ser 'en_curso' (nivel recién desbloqueado, aún no intentado)
+            intentos: 0, // Nivel nuevo: 0 intentos fallidos (aún no ha intentado)
+            vidas_actuales: 3, // Inicia con 3 vidas cuando se desbloquea el siguiente nivel
+            ultima_recarga: null, // Sin recarga hasta que pierda una vida
+            ultima_lectura_detalle: null, // Se inicializa como null, se actualiza cuando lee el detalle
+            ultimo_resultado: null,
+            ultima_vez: DateTime.now(),
+            id_sesion: opts.id_sesion || null, // Vincular con la sesión que generó este progreso
+          } as any)
+          
+          console.log(`[upsertProgresoNivel] ✓ Nuevo registro creado exitosamente para nivel ${nivelSiguiente}: id_progreso=${(nuevoRegistroSiguiente as any).id_progreso}, subtema="${subtemaSiguienteNormalizado}", vidas=${(nuevoRegistroSiguiente as any).vidas_actuales}, intentos=0`)
+        } catch (err: any) {
+          // Si falla por constraint único, significa que el constraint aún existe
+          if (err?.code === '23505' || err?.message?.includes('unique')) {
+            console.error(`[upsertProgresoNivel] ✗ ERROR: Constraint único detectado al crear nivel ${nivelSiguiente}. El constraint único debe ser modificado para permitir múltiples registros del mismo nivel.`)
+            console.error(`[upsertProgresoNivel] Error:`, err?.message || err)
+          } else {
+            console.error(`[upsertProgresoNivel] ✗ Error al crear registro para nivel ${nivelSiguiente}:`, err?.message || err)
+          }
+        }
+      }
+    }
+
+  // NO crear registros "Nivel Global" - solo guardar subtema real
+  // Los registros de progreso_nivel deben tener el subtema real del nivel
 }
+
 
 export default class SesionesService {
 
@@ -292,7 +539,7 @@ async crearQuizInicial({ id_usuario }: { id_usuario: number; id_institucion?: nu
     id_usuario,
     area: 'Todas',
     tipo: 'diagnostico',
-    nivel_orden: 0,
+    nivel_orden: 8, // Diagnóstico siempre es nivel 8
     subtema: 'Todos',
     total_preguntas: pack.length,
     modo: 'estandar',
@@ -910,7 +1157,7 @@ public async ProgresoDiagnostico(
     .filter((x): x is RespNorm => x !== null)
   // -----------------------------------------------
 
-  // Si no llegó nada útil: cerrar en cero
+  // Si no llegó nada útil: cerrar en cero y marcar como finalizado
   if (respuestas.length === 0) {
     ;(ses as any).correctas = 0
     ;(ses as any).puntaje_porcentaje = 0
@@ -920,6 +1167,24 @@ public async ProgresoDiagnostico(
     const inicio = (ses as any).inicio_at ? DateTime.fromISO(String((ses as any).inicio_at)) : null
     const fin = (ses as any).fin_at ? DateTime.fromISO(String((ses as any).fin_at)) : null
     const duracionSegundos = inicio && fin ? Math.max(0, Math.round(fin.diff(inicio, 'seconds').seconds)) : 0
+
+    // CRÍTICO: Si no respondió nada, también debe guardarse como nivel finalizado (no aprobado)
+    if ((ses as any).area && (ses as any).subtema) {
+      const nivelSesion = (ses as any).nivel_orden ?? 1
+      const nivel = nivelSesion === 0 ? 8 : nivelSesion
+      
+      await upsertProgresoNivel({
+        id_usuario: (ses as any).id_usuario,
+        area: (ses as any).area,
+        subtema: (ses as any).subtema,
+        nivel_orden: nivel,
+        preguntas_por_intento: (ses as any).total_preguntas ?? 5,
+        correctas: 0,
+        puntaje: 0,
+        aprueba: false, // No aprobó porque no respondió nada
+        id_sesion: (ses as any).id_sesion || null,
+      })
+    }
 
     return {
       aprueba: false,
@@ -1098,12 +1363,26 @@ public async ProgresoDiagnostico(
   const resultado = aprueba ? 'aprobado' : 'no_aprobado'
 
   if ((ses as any).area && (ses as any).subtema) {
+    // Asegurar que puntaje siempre tenga un valor numérico
+    const puntajeFinal = (ses as any).puntaje_porcentaje != null 
+      ? Number((ses as any).puntaje_porcentaje) 
+      : (correctas > 0 ? Math.round((correctas * 100) / Math.max(1, Number((ses as any).total_preguntas) || 5)) : 0)
+    
     await upsertProgresoNivel({
       id_usuario: (ses as any).id_usuario,
       area: (ses as any).area,
       subtema: (ses as any).subtema,
-      nivel_orden: (ses as any).nivel_orden ?? 1,
+      // Asegurar que nivel_orden use el mismo valor que la sesión
+      // Si es 0 (diagnóstico antiguo), convertir a 8
+      nivel_orden: (() => {
+        const nivelSesion = (ses as any).nivel_orden ?? 1
+        return nivelSesion === 0 ? 8 : nivelSesion
+      })(),
       preguntas_por_intento: (ses as any).total_preguntas ?? 5,
+      correctas: correctas,
+      puntaje: puntajeFinal,
+      aprueba: aprueba,
+      id_sesion: (ses as any).id_sesion || null, // Vincular con la sesión que generó este progreso
     })
   }
 
@@ -1158,7 +1437,13 @@ public async ProgresoDiagnostico(
   async crearSimulacroArea(d: { id_usuario: number; area: Area }) {
     this.ensureDetalleTable()
 
-    const area = String(d.area ?? '').trim() as Area
+    // CRÍTICO: Normalizar el área recibida al formato canónico antes de buscar preguntas
+    // El backend espera: "Matematicas", "Lenguaje", "Ciencias", "sociales", "Ingles"
+    const areaRaw = String(d.area ?? '').trim()
+    const area = canonArea(areaRaw) || (areaRaw as Area)
+    
+    console.log(`[crearSimulacroArea] Área recibida: "${areaRaw}", área normalizada: "${area}"`)
+    
     const TARGET = 25
 
     // NO cerramos sesiones previas para permitir múltiples áreas activas
@@ -1176,38 +1461,96 @@ public async ProgresoDiagnostico(
         time_limit_seconds: (b as any).tiempo_limite_seg ?? null,
       }))
 
+    // CRÍTICO: Buscar preguntas SOLO del área especificada, sin importar variaciones de nombre
+    // Usar múltiples variantes del nombre del área para asegurar que encontremos todas las preguntas
+    const areaVariantes = [
+      area, // Área canónica
+      area === 'Matematicas' ? 'Matemáticas' : area,
+      area === 'sociales' ? 'Sociales' : area,
+      area === 'Ciencias' ? 'Ciencias Naturales' : area,
+    ].filter((v, i, arr) => arr.indexOf(v) === i) // Eliminar duplicados
+    
+    console.log(`[crearSimulacroArea] Buscando preguntas con variantes: ${areaVariantes.join(', ')}`)
+    
     try {
+      // Intentar con whereRaw que normaliza acentos y mayúsculas
       const base = await BancoPregunta.query()
-        .whereRaw('unaccent(lower(area)) = unaccent(lower(?))', [area])
+        .where((qb) => {
+          for (const variante of areaVariantes) {
+            qb.orWhereRaw('unaccent(lower(area)) = unaccent(lower(?))', [variante])
+          }
+        })
         .orderByRaw('random()')
-        .limit(TARGET * 2)
+        .limit(TARGET * 3) // Buscar más para tener opciones
       for (const r of base) {
         const id = Number((r as any).id_pregunta)
         if (!ya.has(id) && elegidas.length < TARGET) {
-          ya.add(id)
-          elegidas.push(...mapBanco([r]))
+          // Verificar doble que realmente pertenece al área
+          const areaPregunta = String((r as any).area || '').trim().toLowerCase()
+          const areaBuscada = String(area).trim().toLowerCase()
+          if (areaPregunta.includes(areaBuscada) || areaBuscada.includes(areaPregunta) || 
+              areaVariantes.some(v => areaPregunta.includes(String(v).toLowerCase()))) {
+            ya.add(id)
+            elegidas.push(...mapBanco([r]))
+          }
         }
       }
-    } catch {
-      const base = await BancoPregunta.query().whereILike('area', `%${area}%`).orderByRaw('random()').limit(TARGET * 2)
-      for (const r of base) {
-        const id = Number((r as any).id_pregunta)
-        if (!ya.has(id) && elegidas.length < TARGET) {
-          ya.add(id)
-          elegidas.push(...mapBanco([r]))
+    } catch (e) {
+      console.error(`[crearSimulacroArea] Error en búsqueda principal:`, e)
+      // Fallback: intentar con whereILike pero manteniendo el filtro de área
+      try {
+        const base = await BancoPregunta.query()
+          .where((qb) => {
+            for (const variante of areaVariantes) {
+              qb.orWhereILike('area', `%${variante}%`)
+            }
+          })
+          .orderByRaw('random()')
+          .limit(TARGET * 3)
+        for (const r of base) {
+          const id = Number((r as any).id_pregunta)
+          if (!ya.has(id) && elegidas.length < TARGET) {
+            // Verificar doble que realmente pertenece al área
+            const areaPregunta = String((r as any).area || '').trim().toLowerCase()
+            const areaBuscada = String(area).trim().toLowerCase()
+            if (areaPregunta.includes(areaBuscada) || areaBuscada.includes(areaPregunta) || 
+                areaVariantes.some(v => areaPregunta.includes(String(v).toLowerCase()))) {
+              ya.add(id)
+              elegidas.push(...mapBanco([r]))
+            }
+          }
         }
+      } catch (e2) {
+        console.error(`[crearSimulacroArea] Error en fallback:`, e2)
+        // Si falla, NO traer preguntas de otras áreas - mejor devolver menos preguntas
       }
     }
 
     const faltan = () => TARGET - elegidas.length
     if (faltan() > 0) {
-      const extra = await BancoPregunta.query().orderByRaw('random()').limit(faltan())
-      for (const r of extra) {
-        const id = Number((r as any).id_pregunta)
-        if (!ya.has(id) && elegidas.length < TARGET) {
-          ya.add(id)
-          elegidas.push(...mapBanco([r]))
+      // CRÍTICO: Mantener el filtro de área SIEMPRE, nunca traer preguntas de otras áreas
+      // Intentar con whereILike más flexible pero manteniendo el área
+      try {
+        const extra = await BancoPregunta.query()
+          .whereILike('area', `%${area}%`)
+          .if(ya.size > 0, (qb) => qb.whereNotIn('id_pregunta', Array.from(ya)))
+          .orderByRaw('random()')
+          .limit(faltan() * 2) // Buscar más para tener opciones
+        for (const r of extra) {
+          const id = Number((r as any).id_pregunta)
+          if (!ya.has(id) && elegidas.length < TARGET) {
+            // Verificar que realmente pertenezca al área (doble verificación)
+            const areaPregunta = String((r as any).area || '').trim().toLowerCase()
+            const areaBuscada = String(area).trim().toLowerCase()
+            if (areaPregunta.includes(areaBuscada) || areaBuscada.includes(areaPregunta)) {
+              ya.add(id)
+              elegidas.push(...mapBanco([r]))
+            }
+          }
         }
+      } catch (e) {
+        console.error(`[crearSimulacroArea] Error al buscar preguntas adicionales del área ${area}:`, e)
+        // Si falla, NO completar con preguntas de otras áreas - mejor devolver menos preguntas
       }
     }
 
@@ -1279,7 +1622,7 @@ public async ProgresoDiagnostico(
       ]
       const porArea = 5
       const mod = d.modalidad === 'dificil' ? 'dificil' : 'facil'
-      const nivelOrden = mod === 'dificil' ? 8 : 7
+      const nivelOrden = 7 // Simulacro_mixto (Todas las áreas) siempre es nivel 7
 
       // NO cerramos sesiones previas para permitir múltiples áreas activas
 

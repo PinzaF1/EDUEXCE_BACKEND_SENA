@@ -47,6 +47,10 @@ class AdminController {
 
       return response.created(res)
     } catch (e: any) {
+      // Si es un error de duplicado estructurado, retornarlo como está
+      if (e.error && (e.error === 'DUPLICADO_OTRA_INSTITUCION' || e.error === 'DUPLICADO_MISMA_INSTITUCION')) {
+        return response.badRequest(e)
+      }
       return response.badRequest({ error: e.message || 'Error al crear estudiante' })
     }
   }
