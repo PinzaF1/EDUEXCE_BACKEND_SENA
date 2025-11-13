@@ -89,11 +89,27 @@ export default class KolbService {
 
     // 5) Guardar (con columnas largas si existen; de lo contrario, solo JSON)
     const where = { id_usuario }
+    
+    // Asegurar que el JSON esté bien formado antes de guardarlo
+    let respuestasJson: any
+    try {
+      // Intentar guardar como JSONB directamente (si el ORM lo soporta)
+      respuestasJson = limpias
+      // Si no, convertir a string JSON válido
+      const jsonString = JSON.stringify(limpias)
+      // Validar que el JSON sea válido
+      JSON.parse(jsonString)
+      respuestasJson = jsonString
+    } catch (error) {
+      console.error('Error al preparar respuestas_json:', error)
+      throw new Error('Error al preparar las respuestas para guardar')
+    }
+    
     const basePayload = {
       id_usuario,
       id_estilos_aprendizajes: (estiloRow as any).id_estilos_aprendizajes,
       fecha_presentacion: DateTime.now(),
-      respuestas_json: JSON.stringify(limpias), // ahora JSON simple {id_item, valor}
+      respuestas_json: respuestasJson, // JSON bien formado
     }
 
     const payloadLargo = {
@@ -118,7 +134,13 @@ export default class KolbService {
       }
     }
 
-    return { estilo: nombreEstilo, totales: { ...tot, ac_ce, ae_ro } }
+    return { 
+      estilo: nombreEstilo, 
+      descripcion: (estiloRow as any).descripcion || null,
+      caracteristicas: (estiloRow as any).caracteristicas || null,
+      recomendaciones: (estiloRow as any).recomendaciones || null,
+      totales: { ...tot, ac_ce, ae_ro } 
+    }
   }
 
   async obtenerResultado(id_usuario: number) {
@@ -145,9 +167,51 @@ export default class KolbService {
       let arr: Array<{ id_item: number; valor: number }> = []
       try {
         const raw = (row as any).respuestas_json
-        arr = Array.isArray(raw) ? raw : JSON.parse(raw || '[]')
-      } catch {}
-      const ids = arr.map((x) => x.id_item)
+        
+        // Si es un array, usarlo directamente
+        if (Array.isArray(raw)) {
+          arr = raw.filter((r: any) => r && typeof r === 'object' && typeof r.id_item === 'number' && typeof r.valor === 'number')
+        } else if (typeof raw === 'string') {
+          // Si es string, intentar parsearlo
+          // Limpiar el string si tiene caracteres extraños (como timestamps concatenados)
+          let cleanJson = raw.trim()
+          // Si el string termina con un timestamp o tiene caracteres extraños, intentar extraer solo el JSON
+          const jsonMatch = cleanJson.match(/^\[.*\]/)
+          if (jsonMatch) {
+            cleanJson = jsonMatch[0]
+          }
+          
+          try {
+            const parsed = JSON.parse(cleanJson)
+            if (Array.isArray(parsed)) {
+              arr = parsed.filter((r: any) => r && typeof r === 'object' && typeof r.id_item === 'number' && typeof r.valor === 'number')
+            }
+          } catch (parseError) {
+            // Si el JSON está corrupto, intentar extraer objetos válidos manualmente
+            console.error('Error parseando respuestas_json:', parseError)
+            // Intentar encontrar objetos JSON válidos en el string
+            const jsonObjects = cleanJson.match(/\{[^}]*"id_item"[^}]*"valor"[^}]*\}/g)
+            if (jsonObjects) {
+              arr = jsonObjects.map((objStr: string) => {
+                try {
+                  return JSON.parse(objStr)
+                } catch {
+                  return null
+                }
+              }).filter((r: any) => r && typeof r.id_item === 'number' && typeof r.valor === 'number')
+            }
+          }
+        } else if (raw && typeof raw === 'object') {
+          // Si es un objeto (no array), intentar convertirlo a array
+          arr = Object.values(raw).filter((r: any) => r && typeof r === 'object' && typeof r.id_item === 'number' && typeof r.valor === 'number')
+        }
+      } catch (error) {
+        console.error('Error procesando respuestas_json:', error)
+        // Si hay error, intentar usar las columnas de totales si existen
+        // Si no existen, retornar null para que el endpoint retorne 404
+      }
+      
+      const ids = arr.map((x) => x.id_item).filter((id: number) => Number.isFinite(id) && id > 0)
       if (ids.length) {
         const cat = await PreguntaEstiloAprendizaje
           .query()

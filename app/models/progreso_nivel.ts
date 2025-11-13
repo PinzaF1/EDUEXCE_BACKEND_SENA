@@ -1,5 +1,6 @@
 import { BaseModel, column, belongsTo } from '@adonisjs/lucid/orm'
 import type { BelongsTo } from '@adonisjs/lucid/types/relations'
+import { DateTime } from 'luxon'
 import Usuario from './usuario.js'
 
 export default class ProgresoNivel extends BaseModel {
@@ -17,9 +18,14 @@ export default class ProgresoNivel extends BaseModel {
   @column() declare aciertos_minimos: number
   @column() declare max_intentos_antes_retroceso: number
 
-  @column() declare estado: 'pendiente'|'en_curso'|'superado'
+  @column() declare estado: 'pendiente'|'en_curso'|'superado'|'finalizado'
   @column() declare intentos: number
+  @column() declare vidas_actuales?: number // Vidas restantes (0-3)
+  @column.dateTime() declare ultima_recarga?: DateTime // Timestamp de última recarga de vida
+  @column.dateTime() declare ultima_lectura_detalle?: DateTime // Timestamp de última lectura de detalle (recarga mitad vida)
   @column() declare ultimo_resultado?: number
+  @column.dateTime() declare ultima_vez?: DateTime
+  @column() declare id_sesion?: number | null
 
   @belongsTo(() => Usuario, { foreignKey: 'id_usuario' })
   declare usuario: BelongsTo<typeof Usuario>
