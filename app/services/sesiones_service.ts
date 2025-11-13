@@ -1030,8 +1030,8 @@ public async ProgresoDiagnostico(
 
   // 4) Guardar preguntas según la fuente
   if (usandoIA) {
-    // Guardar preguntas de IA en JSONB
-    ;(sesion as any).preguntas_generadas = preguntasGeneradasJSONB
+    // Guardar preguntas de IA en JSONB (convertir a string JSON)
+    ;(sesion as any).preguntas_generadas = JSON.stringify(preguntasGeneradasJSONB)
     await sesion.save()
     console.log(`[crearParada] Preguntas de IA guardadas en JSONB para sesión ${id_sesion}`)
   } else {
