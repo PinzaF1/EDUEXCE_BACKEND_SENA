@@ -3,6 +3,7 @@ import Sesion from '../models/sesione.js'
 import SesionDetalle from '../models/sesiones_detalle.js'
 import IaService, { AreaUI } from './ia_service.js'
 import IaExternalService from './ia_external_service.js'
+import IaPreguntasService from './ia_preguntas_service.js'
 import { mapearSubtema } from './subtemas_mapper.js'
 import EstilosAprendizaje from '../models/estilos_aprendizaje.js'
 import BancoPregunta from '../models/banco_pregunta.js'
@@ -694,40 +695,53 @@ public async ProgresoDiagnostico(
   // NOTA: El estilo Kolb es OPCIONAL y completamente independiente del sistema de niveles
   // Si no hay estilo Kolb, la API de IA genera preguntas genéricas sin adaptación
   const estiloParaIA = estilo_kolb || 'Asimilador'  // Fallback solo para compatibilidad con API
+  const useDirectOpenAI = process.env.USE_OPENAI_DIRECT === 'true'
   
   // Mapear subtema a formato que acepta la API de IA
   const subtemaParaAPI = mapearSubtema(areaUI, subtema)
   
   try {
-    console.log(`[crearParada] 🤖 Intentando generar preguntas con API de IA...`)
-    console.log(`[crearParada] Subtema original: "${subtema}"`)
-    console.log(`[crearParada] Subtema para API: "${subtemaParaAPI}"`)
+    console.log(`[crearParada] 🤖 Generando preguntas con IA...`)
+    console.log(`[crearParada] Método: ${useDirectOpenAI ? 'SDK OpenAI DIRECTO' : 'API Python Render'}`)
+    console.log(`[crearParada] Subtema: "${subtema}" → "${subtemaParaAPI}"`)
     
-    const preguntasTransformadas = await IaExternalService.generarPreguntasIA({
-      area: areaUI,
-      subtema: subtemaParaAPI,
-      estilo_kolb: estiloParaIA,
-      cantidad: 5,
-    })
-
-    console.log(`[crearParada] 🔍 Preguntas recibidas de API:`, preguntasTransformadas?.length ?? 0)
-    console.log(`[crearParada] 🔍 Tipo:`, typeof preguntasTransformadas)
-    console.log(`[crearParada] 🔍 Es array:`, Array.isArray(preguntasTransformadas))
-
-    if (preguntasTransformadas && preguntasTransformadas.length > 0) {
-      console.log(`[crearParada] ✅ VALIDACIÓN EXITOSA: API de IA generó ${preguntasTransformadas.length} preguntas`)
-      preguntasIA = IaExternalService.prepararParaMovil(preguntasTransformadas)
-      preguntasGeneradasJSONB = IaExternalService.prepararParaJSONB(preguntasTransformadas)
-      usandoIA = true
-      console.log(`[crearParada] ✅ Preguntas preparadas para móvil:`, preguntasIA.length)
-      console.log(`[crearParada] ✅ Preguntas preparadas para JSONB:`, preguntasGeneradasJSONB.length)
+    let preguntasTransformadas: any[]
+    
+    if (useDirectOpenAI) {
+      const iaPreguntasService = new IaPreguntasService()
+      if (!iaPreguntasService.isEnabled()) throw new Error('SDK OpenAI no habilitado')
+      
+      preguntasTransformadas = await iaPreguntasService.generarPreguntas({
+        area: areaUI,
+        subtema: subtemaParaAPI,
+        estilo_kolb: estiloParaIA as any,
+        cantidad: 5,
+      })
+      
+      if (preguntasTransformadas && preguntasTransformadas.length > 0) {
+        preguntasIA = iaPreguntasService.prepararParaMovil(preguntasTransformadas)
+        preguntasGeneradasJSONB = iaPreguntasService.prepararParaJSONB(preguntasTransformadas)
+        usandoIA = true
+        console.log(`[crearParada] ✅ SDK DIRECTO: ${preguntasTransformadas.length} preguntas (id_pregunta=${preguntasIA[0]?.id_pregunta ?? 'null'})`)
+      }
     } else {
-      console.warn(`[crearParada] ⚠️ VALIDACIÓN FALLÓ: preguntasTransformadas vacío o undefined`)
+      preguntasTransformadas = await IaExternalService.generarPreguntasIA({
+        area: areaUI,
+        subtema: subtemaParaAPI,
+        estilo_kolb: estiloParaIA,
+        cantidad: 5,
+      })
+
+      if (preguntasTransformadas && preguntasTransformadas.length > 0) {
+        preguntasIA = IaExternalService.prepararParaMovil(preguntasTransformadas)
+        preguntasGeneradasJSONB = IaExternalService.prepararParaJSONB(preguntasTransformadas)
+        usandoIA = true
+        console.log(`[crearParada] ✅ API PYTHON: ${preguntasTransformadas.length} preguntas`)
+      }
     }
   } catch (error) {
-    console.error('[crearParada] ❌ ERROR CAPTURADO: Al llamar API de IA, usando fallback a BD local')
-    console.error('[crearParada] Error type:', error instanceof Error ? error.constructor.name : typeof error)
-    console.error('[crearParada] Error message:', error instanceof Error ? error.message : String(error))
+    console.error('[crearParada] ❌ Error al generar con IA, usando fallback')
+    console.error('[crearParada]', error instanceof Error ? error.message : String(error))
   }
 
   // 2) Fallback: Si API de IA falló o no hay estilo Kolb, usar BD local

@@ -5,10 +5,17 @@ tmp
 
 # Secrets
 .env
-.env.local
-.env.production
-.env.production.local
-.env.development.local
+.env.*
+!.env.example
+!.env.test
+
+# SQLite databases (for testing)
+*.sqlite
+*.sqlite3
+*.db
+database/*.sqlite
+database/*.sqlite3
+database/*.db
 
 # Firebase credentials (NEVER commit)
 config/firebase-admin-sdk.json
