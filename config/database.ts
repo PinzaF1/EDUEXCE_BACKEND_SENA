@@ -4,7 +4,7 @@ import { defineConfig } from '@adonisjs/lucid'
 const isProduction = env.get('NODE_ENV') === 'production'
 
 const dbConfig = defineConfig({
-  connection: 'postgres',
+  connection: env.get('DB_CONNECTION', 'postgres'),
   connections: {
     postgres: {
       client: 'pg',
@@ -21,6 +21,19 @@ const dbConfig = defineConfig({
         naturalSort: true,
         paths: ['database/migrations'],
       },
+    },
+// ✅ Conexión TESTING (SQLite en memoria)
+    sqlite: {
+      client: 'better-sqlite3',
+      connection: {
+        filename: env.get('DB_DATABASE', ':memory:'),
+      },
+      useNullAsDefault: true,
+      migrations: {
+        naturalSort: true,
+        paths: ['database/migrations'],
+      },
+      debug: env.get('DB_DEBUG', false),
     },
   },
 })
