@@ -27,5 +27,23 @@ export default await Env.create(new URL('../', import.meta.url), {
   DB_PORT: Env.schema.number(),
   DB_USER: Env.schema.string(),
   DB_PASSWORD: Env.schema.string.optional(),
-  DB_DATABASE: Env.schema.string()
+  DB_DATABASE: Env.schema.string(),
+
+  /*
+  |----------------------------------------------------------
+  | Variables for Firebase Admin SDK (FCM notifications)
+  |----------------------------------------------------------
+  */
+  FIREBASE_SERVICE_ACCOUNT: Env.schema.string.optional(),
+
+  /*
+  |----------------------------------------------------------
+  | Variables for OpenAI (AI-powered question generation)
+  |----------------------------------------------------------
+  */
+  OPENAI_API_KEY: Env.schema.string.optional(),
+  OPENAI_MODEL: Env.schema.string.optional(),
+  OPENAI_TIMEOUT_MS: Env.schema.number.optional(),
+  OPENAI_BASE_URL: Env.schema.string.optional(),
+  USE_OPENAI_DIRECT: Env.schema.boolean.optional()
 })

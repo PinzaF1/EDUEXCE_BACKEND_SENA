@@ -5,16 +5,33 @@ tmp
 
 # Secrets
 .env
-.env.local
-.env.production
-.env.production.local
-.env.development.local
+.env.*
+!.env.example
+!.env.test
+
+# SQLite databases (for testing)
+*.sqlite
+*.sqlite3
+*.db
+database/*.sqlite
+database/*.sqlite3
+database/*.db
+
+# Firebase credentials (NEVER commit)
+config/firebase-admin-sdk.json
+firebase-admin-sdk.json
+*firebase-adminsdk*.json
+!*firebase-admin-sdk.example.json
 
 # Archivos con credenciales reales (no subir)
 CREDENCIALES_*.txt
 *_REALES.*
 test-smtp-verificado.cjs
+test-smtp.cjs
 env.txt
+
+# Reportes y documentación temporal (no subir)
+REPORTE_SEGURIDAD.md
 
 # Archivos temporales de testing
 test-recovery-flow.*

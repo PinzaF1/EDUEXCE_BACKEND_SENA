@@ -118,6 +118,9 @@ Route.post('movil/sincronizacion/nivel', (ctx) => new MovilController().actualiz
 Route.post('movil/sincronizacion/vidas', (ctx) => new MovilController().actualizarVidas(ctx)).use(onlyRol({ rol: 'estudiante' }))
 Route.post('movil/sincronizacion/todo', (ctx) => new MovilController().sincronizarProgreso(ctx)).use(onlyRol({ rol: 'estudiante' }))
 
+// FCM TOKEN (NOTIFICACIONES PUSH)
+Route.post('movil/fcm-token', (ctx) => new MovilController().registrarFcmToken(ctx)).use(onlyRol({ rol: 'estudiante' }))
+
 
 
 

@@ -30,6 +30,7 @@ export default class Sesion extends BaseModel {
   @column() declare duracion_segundos?: number
   @column() declare resultado?: 'aprobado'|'no_aprobado'
   @column() declare detalle_resumen?: any
+  @column() declare preguntas_generadas?: any  // JSONB: Preguntas generadas por IA
 
   @column.dateTime({ autoCreate: true }) declare createdAt: DateTime
   @column.dateTime({ autoCreate: true, autoUpdate: true }) declare updatedAt: DateTime
