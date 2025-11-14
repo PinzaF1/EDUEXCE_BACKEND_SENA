@@ -8,6 +8,8 @@ tmp
 .env.*
 !.env.example
 !.env.test
+.env.supabase.backup
+.env.local.backup
 
 # SQLite databases (for testing)
 *.sqlite
