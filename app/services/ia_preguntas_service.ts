@@ -394,7 +394,7 @@ export default class IaPreguntasService {
       const response = await this.client.chat.completions.create(
         {
           model: this.model,
-          temperature: 0.2, // Baja temperatura para respuestas más consistentes
+          temperature: 0.5, // Balance entre consistencia y creatividad para mayor variedad
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
@@ -429,8 +429,17 @@ export default class IaPreguntasService {
         `✅ [IA Preguntas] Parseadas ${parsed.preguntas.length} preguntas correctamente`
       )
 
+      // Mezclar opciones para distribuir aleatoriamente las respuestas correctas
+      const preguntasMezcladas = parsed.preguntas.map((pregunta) =>
+        this.mezclarOpciones(pregunta)
+      )
+
+      console.log(
+        `✅ [IA Preguntas] Opciones mezcladas aleatoriamente para distribuir respuestas`
+      )
+
       // Transformar preguntas al formato interno
-      const preguntasTransformadas = parsed.preguntas.map((pregunta, index) =>
+      const preguntasTransformadas = preguntasMezcladas.map((pregunta, index) =>
         this.transformarPregunta(pregunta, index + 1, params)
       )
 
@@ -669,6 +678,59 @@ Recuerda:
 - Formato JSON como especificado
 - Adapta el enfoque según el estilo de aprendizaje Kolb indicado
 - Asegúrate de que cada pregunta sea coherente con la descripción, competencias y estructura oficial del área "${areaOficial}" proporcionadas en el contexto del sistema.`
+  }
+
+  /**
+   * Mezcla aleatoriamente las opciones de una pregunta y actualiza la respuesta correcta
+   * y las referencias en la explicación para evitar que todas sean 'A'
+   */
+  private mezclarOpciones(pregunta: PreguntaGenerada): PreguntaGenerada {
+    const letrasOriginales = ['A', 'B', 'C', 'D']
+    const letrasMezcladas = [...letrasOriginales].sort(() => Math.random() - 0.5)
+
+    // Crear mapeo: letra_original → letra_nueva
+    const mapeo: Record<string, string> = {}
+    letrasOriginales.forEach((original, index) => {
+      mapeo[original] = letrasMezcladas[index]
+    })
+
+    // Reordenar opciones según el mapeo
+    const nuevasOpciones: Record<string, string> = {}
+    Object.entries(pregunta.opciones).forEach(([letra, texto]) => {
+      const nuevaLetra = mapeo[letra]
+      nuevasOpciones[nuevaLetra] = texto
+    })
+
+    // Actualizar respuesta correcta
+    const respuestaOriginal = pregunta.respuesta_correcta.toUpperCase()
+    const nuevaRespuestaCorrecta = mapeo[respuestaOriginal] || respuestaOriginal
+
+    // Actualizar explicación reemplazando referencias a la letra original
+    let nuevaExplicacion = pregunta.explicacion
+    if (respuestaOriginal !== nuevaRespuestaCorrecta) {
+      // Patrones comunes donde aparece la letra en español
+      const patrones = [
+        new RegExp(`\\b${respuestaOriginal}\\b`, 'g'), // "A" suelta
+        new RegExp(`opción\\s+${respuestaOriginal}\\b`, 'gi'), // "opción A"
+        new RegExp(`respuesta\\s+${respuestaOriginal}\\b`, 'gi'), // "respuesta A"
+        new RegExp(`alternativa\\s+${respuestaOriginal}\\b`, 'gi'), // "alternativa A"
+        new RegExp(`\\(${respuestaOriginal}\\)`, 'g'), // "(A)"
+      ]
+
+      patrones.forEach((patron) => {
+        nuevaExplicacion = nuevaExplicacion.replace(
+          patron,
+          (match) => match.replace(respuestaOriginal, nuevaRespuestaCorrecta)
+        )
+      })
+    }
+
+    return {
+      pregunta: pregunta.pregunta,
+      opciones: nuevasOpciones,
+      respuesta_correcta: nuevaRespuestaCorrecta,
+      explicacion: nuevaExplicacion,
+    }
   }
 
   /**
