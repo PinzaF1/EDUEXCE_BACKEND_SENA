@@ -11,22 +11,25 @@ const corsConfig = defineConfig({
   // Lista explícita de orígenes permitidos (más seguro que origin: true)
   // Agrega aquí los dominios de tu frontend y ngrok
   origin: [
-    'http://localhost:5175', // Puerto actual del frontend
-    'http://localhost:5176',
-    'http://localhost:5173',
-    'http://localhost:3000',
-    // Dominio ngrok activo
-    'https://gillian-semiluminous-blubberingly.ngrok-free.dev',
-    // IP Elastic (Producción - Permanente)
-    'http://52.20.236.109',
-    'http://52.20.236.109:3333',
-    // CloudFront + DuckDNS (Producción HTTPS)
-    'https://d1hy8jjhbmsdtk.cloudfront.net',
-    'https://eduexce-api.duckdns.org',
+      'https://d1hy8jjhbmsdtk.cloudfront.net',
+      // Agrega aquí otros orígenes permitidos si es necesario
   ],
-  methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE','OPTIONS'],
-  headers: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    headers: [
+      'Authorization',
+      'Content-Type',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+      'Access-Control-Allow-Origin',
+      'Access-Control-Allow-Headers',
+    ],
   exposeHeaders: ['authorization'],
+    exposeHeaders: [
+      'Authorization',
+      'Content-Type',
+      'Accept',
+    ],
   credentials: true,
   maxAge: 90,
 })
