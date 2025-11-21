@@ -20,6 +20,9 @@ const corsConfig = defineConfig({
     // IP Elastic (Producción - Permanente)
     'http://52.20.236.109',
     'http://52.20.236.109:3333',
+    // CloudFront + DuckDNS (Producción HTTPS)
+    'https://d1hy8jjhbmsdtk.cloudfront.net',
+    'https://eduexce-api.duckdns.org',
   ],
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE','OPTIONS'],
   headers: true,
