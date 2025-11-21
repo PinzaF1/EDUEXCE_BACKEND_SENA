@@ -13,7 +13,40 @@ export default class HttpExceptionHandler extends ExceptionHandler {
    * response to the client
    */
   async handle(error: unknown, ctx: HttpContext) {
-    return super.handle(error, ctx)
+    // Primero deja que Adonis construya la respuesta de error
+    await super.handle(error, ctx)
+
+    // Forzar cabeceras CORS en todas las respuestas de error (4xx/5xx)
+    try {
+      const requestOrigin = ctx.request.header('origin') || ''
+      const allowedOrigins = [
+        'https://d1hy8jjhbmsdtk.cloudfront.net',
+        'https://eduexce-api.duckdns.org',
+      ]
+
+      const allowOrigin = allowedOrigins.includes(requestOrigin)
+        ? requestOrigin
+        : allowedOrigins[0]
+
+      ctx.response.header('Access-Control-Allow-Origin', allowOrigin)
+      ctx.response.header('Access-Control-Allow-Credentials', 'true')
+      ctx.response.header(
+        'Access-Control-Allow-Methods',
+        'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+      )
+      ctx.response.header(
+        'Access-Control-Allow-Headers',
+        'Authorization,Content-Type,Accept,Origin,X-Requested-With'
+      )
+      ctx.response.header(
+        'Access-Control-Expose-Headers',
+        'authorization,content-type,accept'
+      )
+    } catch (e) {
+      // No bloquear el flujo por problemas al añadir headers
+    }
+
+    return
   }
 
   /**
