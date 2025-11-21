@@ -22,6 +22,9 @@ export default class HttpExceptionHandler extends ExceptionHandler {
       const allowedOrigins = [
         'https://d1hy8jjhbmsdtk.cloudfront.net',
         'https://eduexce-api.duckdns.org',
+        'https://your-frontend.vercel.app', // opcional, reemplazar si se usa Vercel
+        'http://localhost:5173',
+        'http://localhost:3000',
       ]
 
       const allowOrigin = allowedOrigins.includes(requestOrigin)

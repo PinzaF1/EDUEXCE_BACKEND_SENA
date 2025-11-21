@@ -11,8 +11,11 @@ const corsConfig = defineConfig({
   // Lista explícita de orígenes permitidos (más seguro que origin: true)
   // Agrega aquí los dominios de tu frontend y ngrok
   origin: [
-      'https://d1hy8jjhbmsdtk.cloudfront.net',
-      // Agrega aquí otros orígenes permitidos si es necesario
+    'https://d1hy8jjhbmsdtk.cloudfront.net',
+    'https://eduexce-api.duckdns.org',
+    'https://your-frontend.vercel.app', // opcional - reemplazar si aplica
+    'http://localhost:5173', // Vite default
+    'http://localhost:3000' // otros dev servers
   ],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     headers: [
@@ -21,8 +24,7 @@ const corsConfig = defineConfig({
       'Accept',
       'Origin',
       'X-Requested-With',
-      'Access-Control-Allow-Origin',
-      'Access-Control-Allow-Headers',
+      // evita incluir cabeceras de respuesta como 'Access-Control-Allow-*'
     ],
   exposeHeaders: [
     'Authorization',
@@ -30,7 +32,8 @@ const corsConfig = defineConfig({
     'Accept',
   ],
   credentials: true,
-  maxAge: 90,
+    // Aumentar maxAge para reducir preflights en navegadores cuando sea seguro
+    maxAge: 1728000,
 })
 
 export default corsConfig
