@@ -10,13 +10,20 @@ const corsConfig = defineConfig({
   enabled: true,
   // Lista explícita de orígenes permitidos (más seguro que origin: true)
   // Agrega aquí los dominios de tu frontend y ngrok
-  origin: [
-    'https://d1hy8jjhbmsdtk.cloudfront.net',
-    'https://eduexce-api.duckdns.org',
-    'https://your-frontend.vercel.app', // opcional - reemplazar si aplica
-    'http://localhost:5173', // Vite default
-    'http://localhost:3000' // otros dev servers
-  ],
+  origin: (origin: string | undefined) => {
+    const whitelist = [
+      'https://d1hy8jjhbmsdtk.cloudfront.net',
+      'https://eduexce-api.duckdns.org',
+      'https://your-frontend.vercel.app', // opcional - reemplazar si aplica
+      'http://localhost:5173', // Vite default
+      'http://localhost:3000', // otros dev servers
+    ]
+
+    // Allow requests with no Origin header (server-to-server, curl, etc.)
+    if (!origin) return true
+
+    return whitelist.includes(origin)
+  },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     headers: [
       'Authorization',
