@@ -25,6 +25,7 @@ export default class HttpExceptionHandler extends ExceptionHandler {
         'https://your-frontend.vercel.app', // opcional, reemplazar si se usa Vercel
         'http://localhost:5173',
         'http://localhost:3000',
+        'http://localhost:5175',
       ]
 
       const allowOrigin = allowedOrigins.includes(requestOrigin)

@@ -17,6 +17,7 @@ const corsConfig = defineConfig({
       'https://your-frontend.vercel.app', // opcional - reemplazar si aplica
       'http://localhost:5173', // Vite default
       'http://localhost:3000', // otros dev servers
+      'http://localhost:5175' // tu dev server según el error
     ]
 
     // Allow requests with no Origin header (server-to-server, curl, etc.)
