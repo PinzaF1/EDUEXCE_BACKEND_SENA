@@ -24,12 +24,11 @@ const corsConfig = defineConfig({
       'Access-Control-Allow-Origin',
       'Access-Control-Allow-Headers',
     ],
-  exposeHeaders: ['authorization'],
-    exposeHeaders: [
-      'Authorization',
-      'Content-Type',
-      'Accept',
-    ],
+  exposeHeaders: [
+    'Authorization',
+    'Content-Type',
+    'Accept',
+  ],
   credentials: true,
   maxAge: 90,
 })

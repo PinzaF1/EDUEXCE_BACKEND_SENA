@@ -42,6 +42,8 @@ export default class HttpExceptionHandler extends ExceptionHandler {
         'Access-Control-Expose-Headers',
         'authorization,content-type,accept'
       )
+        // Ensure caching proxies vary by Origin so cached responses are origin-safe
+        ctx.response.header('Vary', 'Origin')
     } catch (e) {
       // No bloquear el flujo por problemas al añadir headers
     }
