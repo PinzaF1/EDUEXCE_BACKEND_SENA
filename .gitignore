@@ -60,3 +60,5 @@ yarn-error.log
 
 # Platform specific
 .DS_Store
+".env" 
+".env.production" 
