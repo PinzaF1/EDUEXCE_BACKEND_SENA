@@ -17,8 +17,9 @@ const corsConfig = defineConfig({
     'http://localhost:3000',
     // Dominio ngrok activo
     'https://gillian-semiluminous-blubberingly.ngrok-free.dev',
-    // Agrega tu dominio de producción cuando lo tengas:
-    // 'https://tu-frontend-produccion.com',
+    // IP Elastic (Producción - Permanente)
+    'http://52.20.236.109',
+    'http://52.20.236.109:3333',
   ],
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE','OPTIONS'],
   headers: true,

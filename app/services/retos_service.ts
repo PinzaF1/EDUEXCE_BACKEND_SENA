@@ -92,7 +92,8 @@ export default class RetosService {
   
   
   async listarOponentes(d: { id_institucion: number; solicitante_id: number; q?: string }) {
-    // Retos activos -> usuarios “ocupados”
+    // Retos activos -> usuarios “ocupados” (solo pendiente y en_curso)
+    // IMPORTANTE: Los retos finalizados, cancelados o rechazados ya liberan a los usuarios
     const activos = await Reto.query()
       .where('id_institucion', d.id_institucion)
       .whereIn('estado', ['pendiente', 'en_curso'])
@@ -111,10 +112,55 @@ export default class RetosService {
       }
     }
 
-    // Usuarios de la institución (menos el solicitante)
+    // Usuarios de la institución (menos el solicitante y los ocupados) - SOLO ACTIVOS Y LOGUEADOS
+    // Hacer el filtro menos restrictivo: usuarios activos que han iniciado sesión alguna vez
+    // O que tienen actividad reciente (últimas 24 horas) o sesión abierta activa
+    const ahora = new Date()
+    const ventanaActividad = new Date(ahora.getTime() - 24 * 60 * 60 * 1000) // Últimas 24 horas (más permisivo)
+    
+    // Obtener IDs de usuarios con sesiones abiertas activas (practicando ahora)
+    // Primero obtener usuarios de la institución, luego buscar sus sesiones
+    const usuariosInst = await Usuario.query()
+      .where('id_institucion', d.id_institucion)
+      .where('is_active', true)
+      .select('id_usuario')
+    
+    const idsUsuariosInst = usuariosInst.map((u: any) => Number(u.id_usuario))
+    
+    const Sesion = (await import('../models/sesione.js')).default
+    const sesionesActivas = idsUsuariosInst.length > 0
+      ? await Sesion.query()
+          .whereIn('id_usuario', idsUsuariosInst)
+          .whereNull('fin_at') // Sesiones abiertas
+          .where('updated_at', '>=', new Date(ahora.getTime() - 60 * 60 * 1000) as any) // Actividad en última hora
+          .select('id_usuario')
+      : []
+    
+    const idsConSesionActiva = Array.from(new Set(sesionesActivas.map((s: any) => Number(s.id_usuario))))
+    
+    // Construir query: usuarios activos que han iniciado sesión alguna vez
+    // Y que NO estén ocupados en retos activos
     const q = Usuario.query()
       .where('id_institucion', d.id_institucion)
       .whereNot('id_usuario', d.solicitante_id)
+      .where('is_active', true) // Solo usuarios activos
+      .whereNotIn('id_usuario', Array.from(ocupados)) // EXCLUIR usuarios ocupados en retos activos
+      .where((qb) => {
+        // Usuarios que han iniciado sesión alguna vez (last_login_at no nulo)
+        // Y que tienen actividad reciente (últimas 24 horas) O sesión abierta activa
+        if (idsConSesionActiva.length > 0) {
+          qb.whereNotNull('last_login_at') // Debe haber iniciado sesión alguna vez
+            .where((subQb) => {
+              subQb.whereNotNull('last_activity_at')
+                .where('last_activity_at', '>=', ventanaActividad as any)
+            }).orWhereIn('id_usuario', idsConSesionActiva)
+        } else {
+          // Si no hay sesiones activas, solo filtrar por login y actividad reciente
+          qb.whereNotNull('last_login_at') // Debe haber iniciado sesión alguna vez
+            .whereNotNull('last_activity_at')
+            .where('last_activity_at', '>=', ventanaActividad as any)
+        }
+      })
 
     // Búsqueda opcional por nombre / apellido
     if (d.q && String(d.q).trim()) {
@@ -134,14 +180,12 @@ export default class RetosService {
         grado: u.grado ?? null,
         curso: u.curso ?? null,
         foto_url: u.foto_url ?? null,
-        estado: ocupados.has(id) ? 'en_reto' : 'disponible',
+        estado: 'disponible', // Todos los que aparecen ya están disponibles (ocupados filtrados)
       }
     })
 
-    // Disponibles primero
-    lista.sort((a, b) =>
-      a.estado === b.estado ? a.nombre.localeCompare(b.nombre) : a.estado === 'disponible' ? -1 : 1
-    )
+    // Ordenar alfabéticamente
+    lista.sort((a, b) => a.nombre.localeCompare(b.nombre))
 
     return lista
   }
@@ -256,7 +300,8 @@ async crearReto(d: {
     estado: String((reto as any).estado), // 'pendiente'
     area,
     cantidad: reglasObj.preguntas.length,
-    preguntas: reglasObj.preguntas,
+    // NO devolver preguntas al crear el reto - solo se devuelven cuando el oponente acepta
+    preguntas: [], // El creador NO debe ver las preguntas hasta que el oponente acepte
     oponente: oponente_info,
   }
 }
@@ -321,12 +366,102 @@ async aceptarReto(id_reto: number, id_usuario_invitado: number) {
   const yaTieneSesion = (uid: number) =>
     mapSesiones.some((x) => Number(x.id_usuario) === Number(uid))
 
-  // 4) Crear sesiones SOLO para los usuarios sin sesión
-  for (const uid of participantes) {
-    if (yaTieneSesion(uid)) continue
+  // 4) Crear sesión SOLO para el usuario que está aceptando (NO para todos)
+  // IMPORTANTE: El creador NO debe tener sesión hasta que el OPONENTE acepte
+  const usuarioQueAcepta = Number(id_usuario_invitado)
+  const esCreador = creador === usuarioQueAcepta
+  
+    // IMPORTANTE: Cuando el OPONENTE acepta, automáticamente crear sesión para AMBOS y cambiar a 'en_curso'
+    // El creador NO necesita aceptar explícitamente
+    const esOponente = !esCreador
+    
+    // Si el oponente acepta, crear sesión para ambos y cambiar estado a 'en_curso'
+    if (esOponente && (reto as any).estado === 'pendiente') {
+      console.log(`[aceptarReto] Oponente ${usuarioQueAcepta} acepta el reto - creando sesiones para ambos participantes`)
+      
+      // Crear sesión para el oponente (quien acepta)
+      if (!yaTieneSesion(usuarioQueAcepta)) {
+        const sesOponente = await Sesion.create({
+          id_usuario: usuarioQueAcepta,
+          tipo: 'reto',
+          modo: 'estandar',
+          area: (reto as any).area || null,
+          usa_estilo_kolb: false,
+          inicio_at: DateTime.local(),
+          total_preguntas: preguntas.length,
+          correctas: 0,
+        } as any)
 
+        const id_sesion_oponente = Number((sesOponente as any).id_sesion)
+        let orden = 1
+        for (const p of preguntas) {
+          await SesionDetalle.create({
+            id_sesion: id_sesion_oponente,
+            id_pregunta: Number((p as any).id_pregunta) || null,
+            orden,
+          } as any)
+          orden++
+        }
+        mapSesiones.push({ id_usuario: usuarioQueAcepta, id_sesion: id_sesion_oponente })
+        console.log(`[aceptarReto] Sesión creada para oponente ${usuarioQueAcepta}, id_sesion=${id_sesion_oponente}`)
+      }
+      
+      // Crear sesión para el creador automáticamente
+      if (!yaTieneSesion(creador)) {
+        const sesCreador = await Sesion.create({
+          id_usuario: creador,
+          tipo: 'reto',
+          modo: 'estandar',
+          area: (reto as any).area || null,
+          usa_estilo_kolb: false,
+          inicio_at: DateTime.local(),
+          total_preguntas: preguntas.length,
+          correctas: 0,
+        } as any)
+
+        const id_sesion_creador = Number((sesCreador as any).id_sesion)
+        let orden = 1
+        for (const p of preguntas) {
+          await SesionDetalle.create({
+            id_sesion: id_sesion_creador,
+            id_pregunta: Number((p as any).id_pregunta) || null,
+            orden,
+          } as any)
+          orden++
+        }
+        mapSesiones.push({ id_usuario: creador, id_sesion: id_sesion_creador })
+        console.log(`[aceptarReto] Sesión creada para creador ${creador}, id_sesion=${id_sesion_creador}`)
+      }
+      
+      // Cambiar estado a 'en_curso' inmediatamente
+      ;(reto as any).estado = 'en_curso'
+      ;(reto as any).participantes_json = JSON.stringify(participantes)
+      ;(reto as any).resultados_json = JSON.stringify({ sesiones_por_usuario: mapSesiones })
+      await reto.save()
+      
+      console.log(`[aceptarReto] Reto ${id_reto} cambió a 'en_curso' - ambos participantes tienen sesión`)
+      
+      // Devolver preguntas inmediatamente ya que el estado es 'en_curso'
+      return {
+        reto: {
+          id_reto: Number((reto as any).id_reto),
+          estado: 'en_curso',
+          participantes,
+        },
+        sesiones: mapSesiones,
+        preguntas: preguntas, // Devolver preguntas inmediatamente
+      }
+    }
+  
+    // Si el creador intenta aceptar (aunque ya no debería ser necesario), solo crear su sesión si no la tiene
+    if (esCreador) {
+      console.log(`[aceptarReto] Creador ${creador} intenta aceptar - verificando si ya tiene sesión`)
+    }
+  
+    // Solo crear sesión si el usuario que acepta aún no tiene una
+    if (!yaTieneSesion(usuarioQueAcepta)) {
     const ses = await Sesion.create({
-      id_usuario: uid,
+      id_usuario: usuarioQueAcepta,
       tipo: 'reto',
       modo: 'estandar',
       area: (reto as any).area || null,
@@ -347,27 +482,73 @@ async aceptarReto(id_reto: number, id_usuario_invitado: number) {
       } as any)
       orden++
     }
-    mapSesiones.push({ id_usuario: uid, id_sesion })
+    mapSesiones.push({ id_usuario: usuarioQueAcepta, id_sesion })
   }
 
+  // 5) Actualizar participantes_json
+  ;(reto as any).participantes_json = JSON.stringify(participantes)
+  ;(reto as any).resultados_json = JSON.stringify({ sesiones_por_usuario: mapSesiones })
 
+  // 6) Cambiar estado a 'en_curso' SOLO cuando ambos hayan aceptado (ambos tienen sesión)
+  // Verificar que ambos participantes (creador y oponente) tengan sesión
+  const participantesEsperados = participantes.length
+  const sesionesCreadas = mapSesiones.length
+  
+  // Verificar que ambos participantes únicos tienen sesión
+  const idsConSesion = new Set(mapSesiones.map((s: any) => Number(s.id_usuario)))
+  const todosTienenSesion = participantes.every((uid: number) => idsConSesion.has(uid))
+  
+  // Solo cambiar a 'en_curso' cuando ambos participantes tienen sesión
+  if (todosTienenSesion && participantesEsperados >= 2) {
     ;(reto as any).estado = 'en_curso'
-    ;(reto as any).participantes_json = JSON.stringify(participantes)
-    ;(reto as any).resultados_json = { sesiones_por_usuario: mapSesiones }
+    console.log(`[aceptarReto] Reto ${id_reto} cambió a 'en_curso' - ambos participantes tienen sesión`)
+  } else {
+    // Si solo uno aceptó, mantener en 'pendiente'
+    ;(reto as any).estado = 'pendiente'
+    console.log(`[aceptarReto] Reto ${id_reto} se mantiene en 'pendiente' - solo ${sesionesCreadas} de ${participantesEsperados} tienen sesión`)
+  }
 
-    await reto.save()
+  await reto.save()
 
 
 
   // 6) Respuesta que tu Android ya consume
+  // IMPORTANTE: Solo devolver preguntas si el estado es 'en_curso' (ambos aceptaron)
+  // Si el estado es 'pendiente', NO devolver preguntas
+  const estadoFinal = String((reto as any).estado)
+  const preguntasADevolver = estadoFinal === 'en_curso' ? preguntas : []
+  
+  // Obtener información del oponente (el otro participante)
+  const otroId = participantes.find((id) => Number(id) !== Number(id_usuario_invitado)) ?? null
+  let oponente_info = null as null | {
+    id_usuario: number; nombre: string; grado: any; curso: any; foto_url: any
+  }
+  if (otroId) {
+    const u = await Usuario.find(otroId)
+    if (u) {
+      const mkNom = (usuario: any) => {
+        if (!usuario) return null
+        return {
+          id_usuario: Number((usuario as any).id_usuario),
+          nombre: [ (usuario as any).nombre, (usuario as any).apellido ].filter(Boolean).join(' ').trim(),
+          grado: (usuario as any).grado ?? null,
+          curso: (usuario as any).curso ?? null,
+          foto_url: (usuario as any).foto_url ?? null,
+        }
+      }
+      oponente_info = mkNom(u) as any
+    }
+  }
+  
   return {
     reto: {
       id_reto: Number((reto as any).id_reto),
-      estado: String((reto as any).estado),
+      estado: estadoFinal,
       participantes,
     },
     sesiones: mapSesiones,
-    preguntas,
+    preguntas: preguntasADevolver, // Solo devolver preguntas si el estado es 'en_curso'
+    oponente: oponente_info, // Información del oponente con foto_url
   }
 }
 
@@ -465,20 +646,23 @@ async responderRonda(d: {
 
   // === Procesar respuestas ===
   let correctas = 0
-  let tiempo_total_seg = 60
+  let tiempo_total_seg = 0 // IMPORTANTE: Iniciar en 0, no en 60
   for (const r of d.respuestas || []) {
     const det = detalles.find((x: any) => Number(x.orden) === Number(r.orden))
     if (!det) continue
 
     ;(det as any).alternativa_elegida = r.opcion
     const t = Number(r.tiempo_empleado_seg)
-    const tOk = Number.isFinite(t) ? t : 0
+    // IMPORTANTE: tiempo_empleado_seg es INTEGER en BD, redondear a entero
+    const tOk = Number.isFinite(t) ? Math.round(t) : 0
     ;(det as any).tiempo_empleado_seg = tOk
-    tiempo_total_seg += tOk
+    tiempo_total_seg += tOk // Sumar todos los tiempos reales
     ;(det as any).respondida_at = DateTime.local()
 
     const idp = Number((det as any).id_pregunta)
-    const ok = String((r.opcion || '').toUpperCase()) === (correctaDe.get(idp) || '')
+    // Si opcion es vacío o null, es incorrecta (valor 0) - no respondió
+    const opcion = String(r.opcion || '').trim()
+    const ok = opcion.length > 0 && String(opcion.toUpperCase()) === (correctaDe.get(idp) || '')
     ;(det as any).es_correcta = ok
     if (ok) correctas++
 
@@ -576,6 +760,14 @@ if (resumenReto.jugadores.length >= 2 && resumenReto.ganador != null) {
   /* ===================== ESTADO DEL RETO ===================== */
   async estadoReto(id_reto: number) {
     const reto = await Reto.findOrFail(id_reto)
+    
+    // IMPORTANTE: Verificar timeout SOLO para retos pendientes (no afectar retos en curso o finalizados)
+    const estadoInicial = String((reto as any).estado || '')
+    if (estadoInicial === 'pendiente') {
+      await this.verificarTimeoutRetos()
+      // Recargar el reto después de verificar timeout (puede haber cambiado a 'cancelado')
+      await reto.refresh()
+    }
 
     // Participantes
     let participantes: number[] = []
@@ -604,8 +796,22 @@ if (resumenReto.jugadores.length >= 2 && resumenReto.ganador != null) {
       } catch {}
     }
 
-    // Resumen por jugador
-    const jugadores: Array<{ id_usuario: number; correctas: number; tiempo_total_seg: number }> = []
+    // IMPORTANTE: Solo calcular resumen si el reto está 'en_curso' o 'finalizado'
+    // Si está 'pendiente', no buscar sesiones ni finalizar nada
+    const estadoActual = String((reto as any).estado || '')
+    
+    if (estadoActual !== 'en_curso' && estadoActual !== 'finalizado') {
+      // Si el reto está 'pendiente' o 'cancelado', solo devolver el estado sin calcular nada más
+      return {
+        id_reto: Number((reto as any).id_reto),
+        estado: estadoActual,
+        ganador: null,
+        jugadores: [],
+      }
+    }
+
+    // Resumen por jugador (solo si el reto está en curso o finalizado)
+    const jugadores: Array<{ id_usuario: number; correctas: number; tiempo_total_seg: number; total_respuestas: number }> = []
 
     for (const uid of participantes) {
       const entry = mapSesiones.find((x) => Number(x.id_usuario) === Number(uid))
@@ -614,28 +820,51 @@ if (resumenReto.jugadores.length >= 2 && resumenReto.ganador != null) {
       if (entry) {
         ses = await Sesion.find(entry.id_sesion)
       } else {
-        ses = await Sesion.query()
-          .where('tipo', 'reto')
-          .where('id_usuario', uid)
-          .orderBy('inicio_at', 'desc')
-          .first()
+        // NO buscar sesiones de otros retos - solo las del mapeo
+        continue
       }
 
       if (!ses) continue
 
+      // IMPORTANTE: Solo contar jugadores que terminaron (sesión cerrada)
+      const sesionCerrada = (ses as any).fin_at != null
+      if (!sesionCerrada) {
+        // El jugador aún no terminó, no incluirlo en el cálculo de ganador ni finalización
+        continue
+      }
+
       let correctas = Number((ses as any).correctas) || 0
-      let tiempo = 60
+      let tiempo = 0
+      let totalRespuestas = 0
 
       const dets = await SesionDetalle.query().where('id_sesion', Number((ses as any).id_sesion))
-      if (!correctas) {
+      
+      // Contar respuestas que realmente fueron respondidas (tienen alternativa_elegida o tiempo_empleado_seg)
+      totalRespuestas = dets.filter((d: any) => 
+        d.alternativa_elegida != null || d.tiempo_empleado_seg != null
+      ).length
+      
+      // Si correctas no está en la sesión, calcularlo desde los detalles
+      if (correctas === 0 || !correctas) {
         correctas = dets.filter((d: any) => d.es_correcta === true).length
       }
       tiempo = dets.reduce((a: number, b: any) => a + (Number(b.tiempo_empleado_seg) || 0), 0)
 
-      jugadores.push({ id_usuario: uid, correctas, tiempo_total_seg: tiempo })
+      jugadores.push({ id_usuario: uid, correctas, tiempo_total_seg: tiempo, total_respuestas: totalRespuestas })
     }
 
-    // Ganador
+    // Obtener el total de preguntas esperadas del reto
+    const totalPreguntasEsperadas = Number((reto as any).total_preguntas) || 
+                                     (() => {
+                                       try {
+                                         const reglas = typeof (reto as any).reglas_json === 'string'
+                                           ? JSON.parse((reto as any).reglas_json)
+                                           : (reto as any).reglas_json || {}
+                                         return Array.isArray(reglas?.preguntas) ? reglas.preguntas.length : 25
+                                       } catch { return 25 }
+                                     })()
+
+    // Ganador (solo si hay jugadores con respuestas)
     let ganador: number | null = null
     if (jugadores.length >= 2) {
       const [a, b] = jugadores
@@ -644,39 +873,40 @@ if (resumenReto.jugadores.length >= 2 && resumenReto.ganador != null) {
       else ganador = a.tiempo_total_seg <= b.tiempo_total_seg ? a.id_usuario : b.id_usuario
     }
 
-    // Finaliza cuando todos respondieron
-    const respondedAll = jugadores.length >= participantes.length && jugadores.every(j => j.correctas >= 0)
-    if (respondedAll) {
-  let resObj: any = {}
-  try {
-    const raw = (reto as any).resultados_json
-    resObj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
-  } catch {}
-  resObj.ganador_id = ganador
-  try {
-    reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) }) // << stringify
-    await reto.save()
-  } catch {
-    reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) }) // << stringify
-    await reto.save()
-  }
-
+    // Finaliza SOLO cuando todos respondieron TODAS las preguntas Y el reto está en curso
+    // IMPORTANTE: Verificar que ambos jugadores hayan respondido TODAS las preguntas esperadas
+    const todosRespondieronTodas = estadoActual === 'en_curso' && 
+                                     jugadores.length >= participantes.length && 
+                                     jugadores.every(j => j.total_respuestas >= totalPreguntasEsperadas)
+    if (todosRespondieronTodas) {
+      let resObj: any = {}
+      try {
+        const raw = (reto as any).resultados_json
+        resObj = typeof raw === 'string' ? JSON.parse(raw) : (raw || {})
+      } catch {}
       resObj.ganador_id = ganador
-          try {
-            reto.merge({ estado: 'finalizado', resultados_json: resObj })
-            await reto.save()
-          } catch {
-            reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) })
-            await reto.save()
-          }
-          await this._aplicarMarcadoresFinal(reto as any, ganador ?? null)
+      try {
+        reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) })
+        await reto.save()
+      } catch {
+        reto.merge({ estado: 'finalizado', resultados_json: JSON.stringify(resObj) })
+        await reto.save()
+      }
+      await this._aplicarMarcadoresFinal(reto as any, ganador ?? null)
     }
+
+    // Devolver solo id_usuario, correctas, tiempo_total_seg (sin total_respuestas)
+    const jugadoresRespuesta = jugadores.map(j => ({
+      id_usuario: j.id_usuario,
+      correctas: j.correctas,
+      tiempo_total_seg: j.tiempo_total_seg,
+    }))
 
     return {
       id_reto: Number((reto as any).id_reto),
       estado: String((reto as any).estado),
       ganador: ganador ?? null,
-      jugadores,
+      jugadores: jugadoresRespuesta,
     }
   }
 
@@ -700,6 +930,12 @@ if (resumenReto.jugadores.length >= 2 && resumenReto.ganador != null) {
       const creadorId = Number(r.creado_por)
       const parts = parseIds(r.participantes_json)
       const soyParticipante = parts.includes(d.user_id)
+      
+      // Debug logs para recibidos
+      if (tipo === 'recibidos') {
+        console.log(`[listarRetos] tipo=recibidos, user_id=${d.user_id}, creadorId=${creadorId}, participantes=${JSON.stringify(parts)}, soyParticipante=${soyParticipante}, estado=${r.estado}`)
+      }
+      
       if (tipo === 'enviados')   return creadorId === d.user_id
       if (tipo === 'recibidos')  return creadorId !== d.user_id && soyParticipante
       return creadorId === d.user_id || soyParticipante
@@ -922,8 +1158,103 @@ private async _aplicarMarcadoresFinal(reto: any, ganadorId: number | null) {
   } catch {
     // Silencioso: no rompas el cierre del reto si falla el conteo
   }
-}
+  }
 
+  /* ===================== RECHAZAR RETO ===================== */
+  async rechazarReto(id_reto: number, id_usuario: number) {
+    const reto = await Reto.findOrFail(id_reto)
+    
+    // Parsear participantes
+    const participantes = ((): number[] => {
+      const raw = (reto as any).participantes_json
+      try {
+        if (Array.isArray(raw)) return raw.map(Number).filter(Number.isFinite)
+        if (typeof raw === 'string') {
+          try {
+            const j = JSON.parse(raw)
+            if (Array.isArray(j)) return j.map(Number).filter(Number.isFinite)
+          } catch {
+            return raw.split(/[\s,;|]+/).map(Number).filter(Number.isFinite)
+          }
+        }
+      } catch {}
+      return []
+    })()
+    
+    // Verificar que el usuario es participante (debe ser el invitado, no el creador)
+    if (!participantes.includes(Number(id_usuario))) {
+      throw new Error('No perteneces a este reto.')
+    }
+    
+    // Solo permitir rechazar si el reto está en estado 'pendiente'
+    const estado = String((reto as any).estado || '').toLowerCase()
+    if (estado !== 'pendiente') {
+      throw new Error('Solo se puede rechazar un reto pendiente.')
+    }
+    
+    // Marcar reto como cancelado/rechazado
+    ;(reto as any).estado = 'cancelado'
+    await reto.save()
+    
+    return { message: 'Reto rechazado exitosamente', id_reto: Number((reto as any).id_reto) }
+  }
 
+  /* ===================== ABANDONAR RETO ===================== */
+  async abandonarReto(id_reto: number, id_usuario: number) {
+    const reto = await Reto.findOrFail(id_reto)
+    
+    // Parsear participantes
+    const participantes = ((): number[] => {
+      const raw = (reto as any).participantes_json
+      try {
+        if (Array.isArray(raw)) return raw.map(Number).filter(Number.isFinite)
+        if (typeof raw === 'string') {
+          try {
+            const j = JSON.parse(raw)
+            if (Array.isArray(j)) return j.map(Number).filter(Number.isFinite)
+          } catch {
+            return raw.split(/[\s,;|]+/).map(Number).filter(Number.isFinite)
+          }
+        }
+      } catch {}
+      return []
+    })()
+    
+    // Verificar que el usuario es participante
+    if (!participantes.includes(Number(id_usuario))) {
+      throw new Error('No perteneces a este reto.')
+    }
+    
+    // Solo permitir abandonar si el reto está en estado 'pendiente' o 'en_curso'
+    const estado = String((reto as any).estado || '').toLowerCase()
+    if (estado !== 'pendiente' && estado !== 'en_curso') {
+      throw new Error('No se puede abandonar un reto finalizado o cancelado.')
+    }
+    
+    // Marcar reto como cancelado/abandonado
+    ;(reto as any).estado = 'cancelado'
+    await reto.save()
+    
+    return { message: 'Reto abandonado exitosamente', id_reto: Number((reto as any).id_reto) }
+  }
+
+  /* ===================== TIMEOUT DE 4 MINUTOS ===================== */
+  // Este método puede ser llamado por un cron job o verificado en el estado del reto
+  async verificarTimeoutRetos() {
+    const ahora = DateTime.now()
+    const limite = ahora.minus({ minutes: 4 })
+    
+    // Buscar retos pendientes que fueron creados hace más de 4 minutos
+    const retosPendientes = await Reto.query()
+      .where('estado', 'pendiente')
+      .where('created_at', '<', limite.toJSDate() as any)
+    
+    for (const reto of retosPendientes) {
+      ;(reto as any).estado = 'cancelado'
+      await reto.save()
+    }
+    
+    return { cancelados: retosPendientes.length }
+  }
 
 }
