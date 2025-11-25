@@ -34,6 +34,7 @@ server.use([
  */
 router.use([
   () => import('@adonisjs/core/bodyparser_middleware'),
+  () => import('#middleware/request_body_logger'),
   () => import('#middleware/audit_logger_middleware'),
 ])
 

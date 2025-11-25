@@ -5,6 +5,7 @@ import RegistroController from '../../app/controller/registro_controller.js'
 import AuthController     from '../../app/controller/auth_controller.js'
 import AdminController    from '../../app/controller/admin_controller.js'
 import MovilController    from '../../app/controller/movil_controller.js'
+import DebugController    from '../../app/controller/debug_controller.js'
 
 // PÚBLICAS
 Route.post('instituciones/registro', (ctx) => new RegistroController().registrarInstitucion(ctx))
@@ -120,6 +121,11 @@ Route.post('movil/sincronizacion/todo', (ctx) => new MovilController().sincroniz
 
 // FCM TOKEN (NOTIFICACIONES PUSH)
 Route.post('movil/fcm-token', (ctx) => new MovilController().registrarFcmToken(ctx)).use(onlyRol({ rol: 'estudiante' }))
+// DELETE para desactivar token (logout/uninstall) — acepta JWT de estudiante (propietario) o admin
+Route.delete('movil/fcm-token', (ctx) => new MovilController().eliminarFcmToken(ctx))
+
+// Endpoint protegido para pruebas de notificaciones (activar con env ALLOW_DEBUG_NOTIFICATIONS=true)
+Route.post('debug/send-notification', (ctx) => new DebugController().sendNotification(ctx)).use(onlyRol({ rol: 'administrador' }))
 
 
 
