@@ -6,6 +6,8 @@ services:
       - "3333:3333"
     env_file:
       - .env.production
+    volumes:
+      - ./config/firebase-admin-sdk.json:/app/build/config/firebase-admin-sdk.json:ro
     depends_on:
       - redis
     restart: unless-stopped

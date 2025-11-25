@@ -5,6 +5,7 @@ import SesionDetalle from '../models/sesiones_detalle.js'
 import IaService from './ia_service.js'
 import BancoPregunta from '../models/banco_pregunta.js'
 import Usuario from '../models/usuario.js'
+import FcmService from './fcm_service.js'
 import { DateTime } from 'luxon'
 
 type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
@@ -330,6 +331,25 @@ async aceptarReto(id_reto: number, id_usuario_invitado: number) {
     preguntas = (pack || []).map(mapPreguntaForClient)
     ;(reto as any).reglas_json = { limite_seg: null, preguntas }
     await reto.save()
+  }
+  
+  // Envío de notificación al oponente (no bloquear respuesta)
+  try {
+    const fcm = new FcmService()
+    const creadorUser = await Usuario.find(d.creado_por)
+    const fromName = creadorUser ? `${(creadorUser as any).nombre || ''} ${(creadorUser as any).apellido || ''}`.trim() : 'Alguien'
+    const title = '¡Te han retado!'
+    const body = `${fromName} te retó en ${area}`
+    const dataPayload: Record<string,string> = {
+      tipo: 'reto_recibido',
+      challengeId: String((reto as any).id_reto),
+      fromUserId: String(d.creado_por),
+      institutionId: String(d.id_institucion),
+      deep_link: `eduexce://retos/${(reto as any).id_reto}`,
+    }
+    void fcm.enviarNotificacionPorUsuario(oponente, title, body, dataPayload)
+  } catch (e) {
+    console.error('Error enviando notificación FCM al crear reto:', e)
   }
 
   // 2) Participantes: UNIÓN (existentes + creador + quien acepta)
