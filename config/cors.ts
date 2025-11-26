@@ -10,38 +10,24 @@ const corsConfig = defineConfig({
   enabled: true,
   // Lista explícita de orígenes permitidos (más seguro que origin: true)
   // Agrega aquí los dominios de tu frontend y ngrok
-  origin: (origin: string | undefined) => {
-    const whitelist = [
-      'https://d1hy8jjhbmsdtk.cloudfront.net',
-      'https://eduexce-api.duckdns.org',
-      'https://your-frontend.vercel.app', // opcional - reemplazar si aplica
-      'http://localhost:5173', // Vite default
-      'http://localhost:3000', // otros dev servers
-      'http://localhost:5175' // tu dev server según el error
-    ]
-
-    // Allow requests with no Origin header (server-to-server, curl, etc.)
-    if (!origin) return true
-
-    return whitelist.includes(origin)
-  },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    headers: [
-      'Authorization',
-      'Content-Type',
-      'Accept',
-      'Origin',
-      'X-Requested-With',
-      // evita incluir cabeceras de respuesta como 'Access-Control-Allow-*'
-    ],
-  exposeHeaders: [
-    'Authorization',
-    'Content-Type',
-    'Accept',
+  origin: [
+    'http://localhost:5175', // Puerto actual del frontend
+    'http://localhost:5176',
+    'http://localhost:5173',
+    'http://localhost:3000',
+    // Dominio ngrok activo
+    'https://gillian-semiluminous-blubberingly.ngrok-free.dev',
+    'https://churnable-nimbly-norbert.ngrok-free.dev',
+    // IP Elastic (Producción - Permanente)
+    'http://52.20.236.109',
+    'http://52.20.236.109:3333',
   ],
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  // Permitir headers comunes y personalizados que el frontend pueda enviar
+  headers: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'X-Requested-With', 'Accept'],
+  exposeHeaders: ['authorization'],
   credentials: true,
-    // Aumentar maxAge para reducir preflights en navegadores cuando sea seguro
-    maxAge: 1728000,
+  maxAge: 90,
 })
 
 export default corsConfig
