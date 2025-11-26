@@ -73,20 +73,31 @@ export default class FcmService {
     data: Record<string, string> = {}
   ) {
     try {
+      console.log(`📱 [FCM] Buscando tokens para usuario ${id_usuario}...`)
+      
       // Obtener todos los tokens activos del usuario
       const tokens = await FcmToken.query()
         .where('id_usuario', id_usuario)
         .where('is_active', true)
 
+      console.log(`📱 [FCM] Tokens encontrados: ${tokens.length}`)
+      
       if (tokens.length === 0) {
-        console.log(`⚠️ Usuario ${id_usuario} no tiene tokens FCM activos`)
+        console.log(`⚠️ [FCM] Usuario ${id_usuario} no tiene tokens FCM activos`)
         return { success: false, message: 'No hay tokens activos' }
       }
 
+      // Log de tokens (primeros 10 chars por seguridad)
+      tokens.forEach((token, idx) => {
+        console.log(`📱 [FCM] Token ${idx + 1}: ${token.fcm_token.substring(0, 10)}... (device: ${token.device_id || 'unknown'}, platform: ${token.platform})`)
+      })
+
       const fcmTokens = tokens.map((t) => t.fcm_token)
+      console.log(`📱 [FCM] Enviando a ${fcmTokens.length} dispositivos...`)
+      
       return await this.enviarNotificacionMultiple(fcmTokens, titulo, cuerpo, data)
     } catch (error) {
-      console.error('❌ Error al enviar notificación por usuario:', error)
+      console.error('❌ [FCM] Error al enviar notificación por usuario:', error)
       return { success: false, error: (error as Error).message }
     }
   }
@@ -115,12 +126,10 @@ export default class FcmService {
 
     for (const batch of batches) {
       const message = {
-        notification: {
-          title: titulo,
-          body: cuerpo,
-        },
         data: {
           ...data,
+          title: titulo,
+          body: cuerpo,
           timestamp: new Date().toISOString(),
         },
         tokens: batch,
@@ -196,8 +205,12 @@ export default class FcmService {
     const messaging = FirebaseService.getMessaging()
     try {
       const message = {
-        notification: { title: titulo, body: cuerpo },
-        data: { ...data, timestamp: new Date().toISOString() },
+        data: { 
+          ...data, 
+          title: titulo,
+          body: cuerpo,
+          timestamp: new Date().toISOString() 
+        },
         topic,
       }
       const res = await messaging.send(message)
