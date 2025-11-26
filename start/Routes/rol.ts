@@ -126,6 +126,7 @@ Route.delete('movil/fcm-token', (ctx) => new MovilController().eliminarFcmToken(
 
 // Endpoint protegido para pruebas de notificaciones (activar con env ALLOW_DEBUG_NOTIFICATIONS=true)
 Route.post('debug/send-notification', (ctx) => new DebugController().sendNotification(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.post('debug/tokens-fcm', (ctx) => new DebugController().verificarTokensFCM(ctx)).use(onlyRol({ rol: 'administrador' }))
 
 
 
