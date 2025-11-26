@@ -6,6 +6,7 @@
 
 import NotificacionesRealtimeService from '../app/services/notificaciones_realtime_service.js'
 import Institucion from '../app/models/institucione.js'
+import FcmToken from '../app/models/fcm_token.js'
 
 const realtimeService = new NotificacionesRealtimeService()
 
@@ -115,6 +116,25 @@ export function iniciarCronNotificaciones() {
   }, 30000) // 30 segundos después del inicio
   
   console.log('[Cron] 🚀 Sistema de notificaciones automáticas iniciado exitosamente')
+
+  // ========== LIMPIEZA DE TOKENS FCM INACTIVOS ==========
+  // Ejecutar diariamente
+  const INTERVALO_LIMPIEZA_TOKENS = 24 * 60 * 60 * 1000
+  setInterval(async () => {
+    try {
+      console.log('[Cron] Ejecutando limpieza de tokens FCM inactivos...')
+      const threshold = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)) // 90 días
+      const afectados = await FcmToken.query()
+        .where('is_active', true)
+        .whereNotNull('last_seen')
+        .where('last_seen', '<', threshold as any)
+        .update({ is_active: false })
+
+      console.log(`[Cron] ${afectados} tokens FCM marcados como inactivos por inactividad`)     
+    } catch (error) {
+      console.error('[Cron] Error limpiando tokens FCM:', error)
+    }
+  }, INTERVALO_LIMPIEZA_TOKENS)
 }
 
 // Exportar para que pueda ser importado desde el servidor
