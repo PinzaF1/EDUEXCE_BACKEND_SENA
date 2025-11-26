@@ -13,7 +13,46 @@ export default class HttpExceptionHandler extends ExceptionHandler {
    * response to the client
    */
   async handle(error: unknown, ctx: HttpContext) {
-    return super.handle(error, ctx)
+    // Primero deja que Adonis construya la respuesta de error
+    await super.handle(error, ctx)
+
+    // Forzar cabeceras CORS en todas las respuestas de error (4xx/5xx)
+    try {
+      const requestOrigin = ctx.request.header('origin') || ''
+      const allowedOrigins = [
+        'https://d1hy8jjhbmsdtk.cloudfront.net',
+        'https://eduexce-api.duckdns.org',
+        'https://your-frontend.vercel.app', // opcional, reemplazar si se usa Vercel
+        'http://localhost:5173',
+        'http://localhost:3000',
+        'http://localhost:5175',
+      ]
+
+      const allowOrigin = allowedOrigins.includes(requestOrigin)
+        ? requestOrigin
+        : allowedOrigins[0]
+
+      ctx.response.header('Access-Control-Allow-Origin', allowOrigin)
+      ctx.response.header('Access-Control-Allow-Credentials', 'true')
+      ctx.response.header(
+        'Access-Control-Allow-Methods',
+        'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+      )
+      ctx.response.header(
+        'Access-Control-Allow-Headers',
+        'Authorization,Content-Type,Accept,Origin,X-Requested-With'
+      )
+      ctx.response.header(
+        'Access-Control-Expose-Headers',
+        'authorization,content-type,accept'
+      )
+        // Ensure caching proxies vary by Origin so cached responses are origin-safe
+        ctx.response.header('Vary', 'Origin')
+    } catch (e) {
+      // No bloquear el flujo por problemas al añadir headers
+    }
+
+    return
   }
 
   /**
