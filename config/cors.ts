@@ -17,12 +17,14 @@ const corsConfig = defineConfig({
     'http://localhost:3000',
     // Dominio ngrok activo
     'https://gillian-semiluminous-blubberingly.ngrok-free.dev',
+    'https://churnable-nimbly-norbert.ngrok-free.dev',
     // IP Elastic (Producción - Permanente)
     'http://52.20.236.109',
     'http://52.20.236.109:3333',
   ],
-  methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE','OPTIONS'],
-  headers: true,
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  // Permitir headers comunes y personalizados que el frontend pueda enviar
+  headers: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'X-Requested-With', 'Accept'],
   exposeHeaders: ['authorization'],
   credentials: true,
   maxAge: 90,
