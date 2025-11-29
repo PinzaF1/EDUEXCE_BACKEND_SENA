@@ -71,6 +71,7 @@ export default class NotificacionesService {
     opciones: {
       tipo?: string
       leida?: boolean | null
+      incluir_eliminadas?: boolean
       page?: number
       limit?: number
       desde?: string // fecha ISO
@@ -80,6 +81,7 @@ export default class NotificacionesService {
     const {
       tipo,
       leida,
+      incluir_eliminadas = false,
       page = 1,
       limit = 50,
       desde,
@@ -97,6 +99,7 @@ export default class NotificacionesService {
     // Filtros
     if (tipo) baseQuery.andWhere('tipo', tipo)
     if (typeof leida === 'boolean') baseQuery.andWhere('leida', leida)
+    if (!incluir_eliminadas) baseQuery.andWhere('eliminada', false)
     if (desde) baseQuery.andWhere('created_at', '>=', new Date(desde) as any)
     if (hasta) baseQuery.andWhere('created_at', '<=', new Date(hasta) as any)
 
@@ -118,6 +121,7 @@ export default class NotificacionesService {
       detalle: n.payload?.detalle ?? '',
       payload: n.payload ?? null,
       leida: !!n.leida,
+      eliminada: !!n.eliminada,
       createdAt: n.createdAt ?? n.created_at ?? null,
       created_at: n.created_at ?? n.createdAt ?? null, // Alias
     }))
@@ -139,6 +143,116 @@ export default class NotificacionesService {
     if (!ids?.length) return 0
     const affected = await Notificacion.query().whereIn('id_notificacion', ids).update({ leida: true })
     return affected
+  }
+
+  /** Eliminar notificación individual (soft delete) */
+  async eliminarUna(id_notificacion: number, id_institucion: number, id_usuario_admin: number) {
+    const notificacion = await Notificacion
+      .query()
+      .where('id_notificacion', id_notificacion)
+      .where('id_institucion', id_institucion)
+      .first()
+
+    if (!notificacion) {
+      throw new Error('Notificación no encontrada')
+    }
+
+    await notificacion
+      .merge({
+        eliminada: true,
+        eliminadaEn: new Date() as any,
+        eliminadaPor: id_usuario_admin,
+      })
+      .save()
+
+    return { success: true, mensaje: 'Notificación eliminada correctamente' }
+  }
+
+  /** Eliminar múltiples notificaciones (soft delete) */
+  async eliminarMultiples(ids: number[], id_institucion: number, id_usuario_admin: number) {
+    if (!ids?.length) {
+      throw new Error('No se proporcionaron IDs')
+    }
+
+    if (ids.length > 100) {
+      throw new Error('Máximo 100 notificaciones por operación')
+    }
+
+    const notificaciones = await Notificacion
+      .query()
+      .whereIn('id_notificacion', ids)
+      .where('id_institucion', id_institucion)
+
+    const idsEncontrados = notificaciones.map((n: any) => n.id_notificacion)
+    const idsFallidos = ids.filter(id => !idsEncontrados.includes(id))
+
+    const affected = await Notificacion
+      .query()
+      .whereIn('id_notificacion', idsEncontrados)
+      .update({
+        eliminada: true,
+        eliminadaEn: new Date(),
+        eliminadaPor: id_usuario_admin,
+      })
+
+    if (idsFallidos.length > 0) {
+      return {
+        success: true,
+        eliminadas: affected,
+        fallidas: idsFallidos.length,
+        mensaje: `${affected} de ${ids.length} notificaciones eliminadas`,
+        errores: idsFallidos.map(id => ({ id, error: 'Notificación no encontrada' })),
+      }
+    }
+
+    return {
+      success: true,
+      eliminadas: affected,
+      mensaje: `${affected} notificaciones eliminadas correctamente`,
+    }
+  }
+
+  /** Eliminar todas las notificaciones con filtros opcionales */
+  async eliminarTodas(
+    id_institucion: number,
+    id_usuario_admin: number,
+    filtros: {
+      leidas_solamente?: boolean
+      tipo?: string
+      antes_de?: string
+    } = {}
+  ) {
+    const query = Notificacion
+      .query()
+      .where('id_institucion', id_institucion)
+      .where('eliminada', false)
+
+    if (filtros.leidas_solamente) {
+      query.where('leida', true)
+    }
+
+    if (filtros.tipo) {
+      query.where('tipo', filtros.tipo)
+    }
+
+    if (filtros.antes_de) {
+      query.where('created_at', '<', new Date(filtros.antes_de) as any)
+    }
+
+    // Límite de seguridad: máximo 1000 por operación
+    query.limit(1000)
+
+    const affected = await query.update({
+      eliminada: true,
+      eliminadaEn: new Date(),
+      eliminadaPor: id_usuario_admin,
+    })
+
+    return {
+      success: true,
+      eliminadas: affected,
+      mensaje: `${affected} notificaciones eliminadas correctamente`,
+    }
   }
 
   /** Orquestador: genera TODOS los tipos para el mes actual */

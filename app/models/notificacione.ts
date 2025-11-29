@@ -15,6 +15,9 @@ export default class Notificacion extends BaseModel {
   @column() declare tipo: 'inactividad'|'puntaje_bajo'|'progreso_lento'
   @column() declare payload: any
   @column() declare leida: boolean
+  @column() declare eliminada: boolean
+  @column.dateTime() declare eliminadaEn: DateTime | null
+  @column() declare eliminadaPor: number | null
 
   @column.dateTime() declare createdAt: DateTime
 
