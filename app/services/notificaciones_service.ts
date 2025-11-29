@@ -191,8 +191,8 @@ export default class NotificacionesService {
       .whereIn('id_notificacion', idsEncontrados)
       .update({
         eliminada: true,
-        eliminada_en: new Date(),
-        eliminada_por: id_usuario_admin,
+        eliminadaEn: new Date(),
+        eliminadaPor: id_usuario_admin,
       })
 
     if (idsFallidos.length > 0) {
@@ -244,8 +244,8 @@ export default class NotificacionesService {
 
     const affected = await query.update({
       eliminada: true,
-      eliminada_en: new Date(),
-      eliminada_por: id_usuario_admin,
+      eliminadaEn: new Date(),
+      eliminadaPor: id_usuario_admin,
     })
 
     return {
