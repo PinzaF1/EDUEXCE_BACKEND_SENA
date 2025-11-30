@@ -4,6 +4,10 @@ import app from '@adonisjs/core/services/app'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+// Health check endpoints para monitoreo
+Route.get('/health', '#controller/health_controller.index')
+Route.get('/health/detailed', '#controller/health_controller.detailed')
+
 // Servir archivos estáticos desde public/uploads/fotos
 Route.get('/uploads/fotos/:filename', async ({ params, response }) => {
   try {
