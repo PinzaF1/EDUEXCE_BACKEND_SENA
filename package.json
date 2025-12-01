@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node ace build --ignore-ts-errors",
     "start": "node build/bin/server.js",
-    "postbuild": "sh -c 'cp .env build/.env 2>/dev/null || echo No local .env to copy'",
+    "postbuild": "sh -c 'cp .env build/.env 2>/dev/null || echo No local .env to copy; mkdir -p build/config && cp config/firebase-admin-sdk.json build/config/firebase-admin-sdk.json 2>/dev/null || echo No firebase config to copy'",
     "dev": "node ace serve --hmr",
     "test": "cross-env NODE_ENV=test node ace test",
     "test:watch": "cross-env NODE_ENV=test node ace test --watch",

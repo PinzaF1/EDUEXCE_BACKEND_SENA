@@ -32,22 +32,8 @@ const IMPORTER = (filePath: string) => {
 new Ignitor(APP_ROOT, { importer: IMPORTER })
   .tap((app) => {
     app.booting(async () => {
-      // Activar logging temporal de queries de Lucid/Database
-      try {
-        const { default: Database } = await import('@ioc:Adonis/Lucid/Database')
-        // Registrar todas las queries (temporal, quita esto cuando termines)
-        Database.on('query', (query: any) => {
-          try {
-            // Evitar logear datos sensibles en producción prolongada; es temporal.
-            console.log('[SQL-TRACE]', query.sql, 'bindings=', JSON.stringify(query.bindings || []))
-          } catch (e) {
-            console.log('[SQL-TRACE] error formateando query', e)
-          }
-        })
-        console.log('✅ Query logging activado (temporal)')
-      } catch (e) {
-        console.warn('⚠️ No se pudo activar SQL tracing:', e)
-      }
+      // SQL tracing desactivado en producción: se eliminó el listener temporal
+      // (Se añadió temporalmente para depuración; no es necesario mantenerlo.)
       await import('#start/env')
       // Inicializar Redis si está configurado
       const { initRedis } = await import('#services/redis_service')
