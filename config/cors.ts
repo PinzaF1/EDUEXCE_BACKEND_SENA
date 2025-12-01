@@ -11,7 +11,7 @@ const corsConfig = defineConfig({
   enabled: true,
   
   // Configuración dinámica según el entorno
-  origin: (origin, callback) => {
+  origin: (origin) => {
     // Orígenes permitidos para desarrollo
     const devOrigins = [
       'http://localhost:5175',
@@ -39,21 +39,21 @@ const corsConfig = defineConfig({
 
     // Si no hay origin (por ejemplo, Postman), permitir en desarrollo
     if (!origin && env.get('NODE_ENV') === 'development') {
-      return callback(null, true)
+      return true
     }
 
     // Verificar si el origin está en la lista de permitidos
     if (allowedOrigins.includes(origin)) {
-      return callback(null, true)
+      return true
     }
 
     // En desarrollo, permitir cualquier localhost
     if (env.get('NODE_ENV') === 'development' && origin?.includes('localhost')) {
-      return callback(null, true)
+      return true
     }
 
     // Rechazar otros orígenes
-    return callback(new Error('No permitido por CORS'), false)
+    return false
   },
 
   methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
