@@ -159,9 +159,13 @@ export default class NotificacionesService {
       throw new Error('Notificación no encontrada')
     }
 
-    // sanitizar id_usuario_admin: si es inválido, usar id_institucion como fallback
-    let actor = Number(id_usuario_admin)
-    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = Number(id_institucion)
+    // validar que el actor (usuario que elimina) exista en la tabla usuarios
+    let actor: number | null = Number(id_usuario_admin)
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = null
+    else {
+      const u = await Usuario.query().where('id_usuario', actor).first()
+      if (!u) actor = null
+    }
 
     await notificacion
       .merge({
@@ -198,9 +202,13 @@ export default class NotificacionesService {
     const idsEncontrados = notificaciones.map((n: any) => Number(n.id_notificacion))
     const idsFallidos = validIds.filter(id => !idsEncontrados.includes(id))
 
-    // sanitizar actor
-    let actor = Number(id_usuario_admin)
-    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = Number(id_institucion)
+    // validar que el actor exista en la tabla usuarios; si no existe, usar null
+    let actor: number | null = Number(id_usuario_admin)
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = null
+    else {
+      const u = await Usuario.query().where('id_usuario', actor).first()
+      if (!u) actor = null
+    }
 
     const affected = await Notificacion
       .query()
@@ -258,9 +266,13 @@ export default class NotificacionesService {
     // Límite de seguridad: máximo 1000 por operación
     query.limit(1000)
 
-    // sanitizar actor
-    let actor = Number(id_usuario_admin)
-    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = Number(id_institucion)
+    // validar que el actor exista en la tabla usuarios; si no existe, usar null
+    let actor: number | null = Number(id_usuario_admin)
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = null
+    else {
+      const u = await Usuario.query().where('id_usuario', actor).first()
+      if (!u) actor = null
+    }
 
     const affected = await query.update({
       eliminada: true,
