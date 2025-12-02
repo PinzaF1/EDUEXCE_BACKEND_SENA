@@ -12,6 +12,16 @@ const notificacionesService = new NotificacionesService()
 const perfilService = new PerfilService()
 
 class AdminController {
+  // helper: resolver id numérico del usuario desde el payload JWT
+  private resolveUserIdFromAuth(auth: any): number | null {
+    if (!auth) return null
+    const candidates = [auth.id_usuario, auth.id, auth.sub, auth.userId, auth.user_id]
+    for (const c of candidates) {
+      const n = Number(c)
+      if (Number.isFinite(n) && !Number.isNaN(n)) return Math.trunc(n)
+    }
+    return null
+  }
   // ===== Estudiantes =====
   public async listarEstudiantes({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
@@ -186,7 +196,10 @@ public async editarEstudiante({ request, response }: HttpContext) {
         return response.badRequest({ error: 'ID de notificación inválido' })
       }
 
-      const idAdmin = Number(auth.id_usuario ?? auth.id_institucion)
+      const idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      if (!idAdmin) {
+        return response.badRequest({ error: 'Token inválido: falta id numérico del usuario (claims: id_usuario|id|sub|userId)' })
+      }
       const resultado = await (notificacionesService as any).eliminarUna(
         id,
         Number(auth.id_institucion),
@@ -210,7 +223,10 @@ public async editarEstudiante({ request, response }: HttpContext) {
         return response.badRequest({ error: 'Se requiere un array de IDs' })
       }
 
-      const idAdmin = Number(auth.id_usuario ?? auth.id_institucion)
+      const idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      if (!idAdmin) {
+        return response.badRequest({ error: 'Token inválido: falta id numérico del usuario (claims: id_usuario|id|sub|userId)' })
+      }
       const resultado = await (notificacionesService as any).eliminarMultiples(
         ids,
         Number(auth.id_institucion),
@@ -237,7 +253,11 @@ public async editarEstudiante({ request, response }: HttpContext) {
       if (qs.tipo) filtros.tipo = qs.tipo
       if (qs.antes_de) filtros.antes_de = qs.antes_de
 
-      const idAdmin = Number(auth.id_usuario ?? auth.id_institucion)
+      const idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      if (!idAdmin) {
+        return response.badRequest({ error: 'Token inválido: falta id numérico del usuario (claims: id_usuario|id|sub|userId)' })
+      }
+
       const resultado = await (notificacionesService as any).eliminarTodas(
         Number(auth.id_institucion),
         Number(idAdmin),
