@@ -186,10 +186,11 @@ public async editarEstudiante({ request, response }: HttpContext) {
         return response.badRequest({ error: 'ID de notificación inválido' })
       }
 
+      const idAdmin = Number(auth.id_usuario ?? auth.id_institucion)
       const resultado = await (notificacionesService as any).eliminarUna(
         id,
         Number(auth.id_institucion),
-        Number(auth.id_usuario)
+        Number(idAdmin)
       )
       return response.ok(resultado)
     } catch (error: any) {
@@ -209,10 +210,11 @@ public async editarEstudiante({ request, response }: HttpContext) {
         return response.badRequest({ error: 'Se requiere un array de IDs' })
       }
 
+      const idAdmin = Number(auth.id_usuario ?? auth.id_institucion)
       const resultado = await (notificacionesService as any).eliminarMultiples(
         ids,
         Number(auth.id_institucion),
-        Number(auth.id_usuario)
+        Number(idAdmin)
       )
       
       if (resultado.fallidas > 0) {
@@ -235,9 +237,10 @@ public async editarEstudiante({ request, response }: HttpContext) {
       if (qs.tipo) filtros.tipo = qs.tipo
       if (qs.antes_de) filtros.antes_de = qs.antes_de
 
+      const idAdmin = Number(auth.id_usuario ?? auth.id_institucion)
       const resultado = await (notificacionesService as any).eliminarTodas(
         Number(auth.id_institucion),
-        Number(auth.id_usuario),
+        Number(idAdmin),
         filtros
       )
       return response.ok(resultado)
