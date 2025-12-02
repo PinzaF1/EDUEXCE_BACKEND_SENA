@@ -41,6 +41,9 @@ Route.get('admin/notificaciones', (ctx) => new AdminController().notificaciones(
 Route.get('admin/notificaciones/stream', (ctx) => new AdminController().notificacionesStream(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/notificaciones/generar', (ctx) => new AdminController().generarNotificaciones(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.post('admin/notificaciones/marcar', (ctx) => new AdminController().marcarLeidas(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.delete('admin/notificaciones/:id', (ctx) => new AdminController().eliminarNotificacion(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.post('admin/notificaciones/eliminar-multiples', (ctx) => new AdminController().eliminarNotificacionesMultiples(ctx)).use(onlyRol({ rol: 'administrador' }))
+Route.delete('admin/notificaciones/todas', (ctx) => new AdminController().eliminarTodasNotificaciones(ctx)).use(onlyRol({ rol: 'administrador' }))
 
 Route.get('admin/perfil', (ctx) => new AdminController().verPerfilInstitucion(ctx)).use(onlyRol({ rol: 'administrador' }))
 Route.put('admin/perfil', (ctx) => new AdminController().actualizarPerfilInstitucion(ctx)).use(onlyRol({ rol: 'administrador' }))

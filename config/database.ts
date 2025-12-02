@@ -14,8 +14,8 @@ const dbConfig = defineConfig({
         user: env.get('DB_USER'),
         password: env.get('DB_PASSWORD'),
         database: env.get('DB_DATABASE'),
-        // SSL solo cuando lo necesitas (Supabase/producción)
-        ssl: isProduction ? { rejectUnauthorized: false } : false,
+        // SSL requerido para conexión directa a Supabase
+        ssl: { rejectUnauthorized: false },
       },
       migrations: {
         naturalSort: true,

@@ -154,6 +154,7 @@ public async editarEstudiante({ request, response }: HttpContext) {
       limit: qs.limit ? Number(qs.limit) : 50,
       desde: qs.desde || undefined,
       hasta: qs.hasta || undefined,
+      incluir_eliminadas: qs.incluir_eliminadas === 'true',
     }
     
     // Filtro de leída: acepta 'true', 'false', o undefined (todas)
@@ -174,6 +175,75 @@ public async editarEstudiante({ request, response }: HttpContext) {
     const { ids } = request.body() as any
     const n = await (notificacionesService as any).marcarLeidas(Array.isArray(ids) ? ids : [])
     return response.ok({ marcadas: n })
+  }
+
+  public async eliminarNotificacion({ request, response, params }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const id = Number(params.id)
+      
+      if (!id || isNaN(id)) {
+        return response.badRequest({ error: 'ID de notificación inválido' })
+      }
+
+      const resultado = await (notificacionesService as any).eliminarUna(
+        id,
+        Number(auth.id_institucion),
+        Number(auth.id_usuario)
+      )
+      return response.ok(resultado)
+    } catch (error: any) {
+      if (error.message === 'Notificación no encontrada') {
+        return response.notFound({ error: error.message })
+      }
+      return response.badRequest({ error: error.message || 'Error al eliminar notificación' })
+    }
+  }
+
+  public async eliminarNotificacionesMultiples({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const { ids } = request.body() as any
+
+      if (!Array.isArray(ids)) {
+        return response.badRequest({ error: 'Se requiere un array de IDs' })
+      }
+
+      const resultado = await (notificacionesService as any).eliminarMultiples(
+        ids,
+        Number(auth.id_institucion),
+        Number(auth.id_usuario)
+      )
+      
+      if (resultado.fallidas > 0) {
+        return response.status(207).json(resultado)
+      }
+      
+      return response.ok(resultado)
+    } catch (error: any) {
+      return response.badRequest({ error: error.message || 'Error al eliminar notificaciones' })
+    }
+  }
+
+  public async eliminarTodasNotificaciones({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const qs = request.qs()
+      
+      const filtros: any = {}
+      if (qs.leidas_solamente === 'true') filtros.leidas_solamente = true
+      if (qs.tipo) filtros.tipo = qs.tipo
+      if (qs.antes_de) filtros.antes_de = qs.antes_de
+
+      const resultado = await (notificacionesService as any).eliminarTodas(
+        Number(auth.id_institucion),
+        Number(auth.id_usuario),
+        filtros
+      )
+      return response.ok(resultado)
+    } catch (error: any) {
+      return response.badRequest({ error: error.message || 'Error al eliminar notificaciones' })
+    }
   }
 
   // ===== Perfil institución =====
