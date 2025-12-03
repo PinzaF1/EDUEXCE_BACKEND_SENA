@@ -203,14 +203,14 @@ public async editarEstudiante({ request, response }: HttpContext) {
         return response.badRequest({ error: 'ID de notificación inválido' })
       }
 
-      const idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      let idAdmin = this.resolveUserIdFromAuth(auth) ?? null
       if (!idAdmin) {
-        return response.badRequest({ error: 'Token inválido: falta id numérico del usuario (claims: id_usuario|id|sub|userId)' })
+        console.warn('[AdminController] eliminarNotificacion: token sin id numérico, procediendo con idAdmin=null', { authSummary: { rol: auth?.rol, id_institucion: auth?.id_institucion } })
       }
       const resultado = await (notificacionesService as any).eliminarUna(
         id,
         Number(auth.id_institucion),
-        Number(idAdmin)
+        idAdmin as any
       )
       return response.ok(resultado)
     } catch (error: any) {
@@ -237,14 +237,14 @@ public async editarEstudiante({ request, response }: HttpContext) {
         return response.badRequest({ error: 'Se requiere un array de IDs' })
       }
 
-      const idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      let idAdmin = this.resolveUserIdFromAuth(auth) ?? null
       if (!idAdmin) {
-        return response.badRequest({ error: 'Token inválido: falta id numérico del usuario (claims: id_usuario|id|sub|userId)' })
+        console.warn('[AdminController] eliminarNotificacionesMultiples: token sin id numérico, procediendo con idAdmin=null', { authSummary: { rol: auth?.rol, id_institucion: auth?.id_institucion } })
       }
       const resultado = await (notificacionesService as any).eliminarMultiples(
         ids,
         Number(auth.id_institucion),
-        Number(idAdmin)
+        idAdmin as any
       )
       
       if (resultado.fallidas > 0) {
@@ -267,14 +267,14 @@ public async editarEstudiante({ request, response }: HttpContext) {
       if (qs.tipo) filtros.tipo = qs.tipo
       if (qs.antes_de) filtros.antes_de = qs.antes_de
 
-      const idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      let idAdmin = this.resolveUserIdFromAuth(auth) ?? null
       if (!idAdmin) {
-        return response.badRequest({ error: 'Token inválido: falta id numérico del usuario (claims: id_usuario|id|sub|userId)' })
+        console.warn('[AdminController] eliminarTodasNotificaciones: token sin id numérico, procediendo con idAdmin=null', { authSummary: { rol: auth?.rol, id_institucion: auth?.id_institucion } })
       }
 
       const resultado = await (notificacionesService as any).eliminarTodas(
         Number(auth.id_institucion),
-        Number(idAdmin),
+        idAdmin as any,
         filtros
       )
       return response.ok(resultado)
