@@ -12,7 +12,7 @@ const corsConfig = defineConfig({
   'https://churnable-nimbly-norbert.ngrok-free.dev',
   'http://52.20.236.109',
   'http://52.20.236.109:3333',
-  'https://senaeduexcel.vercel.app', // <--- agregar Vercel
+  'https://senaeduexcel-seven.vercel.app', // <--- agregar Vercel
 ],
 
   // ✅ MÉTODOS: Incluir PATCH si es necesario
