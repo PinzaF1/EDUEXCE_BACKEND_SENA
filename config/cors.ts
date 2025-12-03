@@ -1,32 +1,45 @@
 import { defineConfig } from '@adonisjs/cors'
 
-/**
- * Configuration options to tweak the CORS policy. The following
- * options are documented on the official documentation website.
- *
- * https://docs.adonisjs.com/guides/security/cors
- */
 const corsConfig = defineConfig({
   enabled: true,
-  // Lista explícita de orígenes permitidos (más seguro que origin: true)
-  // Agrega aquí los dominios de tu frontend y ngrok
+
+  // ✅ ORIGEN: Lista explícita (CORRECTO)
   origin: [
-    'http://localhost:5175', // Puerto actual del frontend
-    'http://localhost:5176',
-    'http://localhost:5173',
-    'http://localhost:3000',
-    // Dominio ngrok activo
-    'https://gillian-semiluminous-blubberingly.ngrok-free.dev',
-    'https://churnable-nimbly-norbert.ngrok-free.dev',
-    // IP Elastic (Producción - Permanente)
-    'http://52.20.236.109',
-    'http://52.20.236.109:3333',
+  'http://localhost:5173',
+  'http://localhost:5176',
+  'http://localhost:3000',
+  'https://gillian-semiluminous-blubberingly.ngrok-free.dev',
+  'https://churnable-nimbly-norbert.ngrok-free.dev',
+  'http://52.20.236.109',
+  'http://52.20.236.109:3333',
+  'https://senaeduexcel.vercel.app', // <--- agregar Vercel
+],
+
+  // ✅ MÉTODOS: Incluir PATCH si es necesario
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+
+  // ✅ HEADERS: Mejorar para preflight
+  headers: [
+    'Content-Type',
+    'Authorization',
+    'ngrok-skip-browser-warning',
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'X-Custom-Header' // si usas headers personalizados
   ],
-  methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  // Permitir headers comunes y personalizados que el frontend pueda enviar
-  headers: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'X-Requested-With', 'Accept'],
-  exposeHeaders: ['authorization'],
+
+  // ✅ EXPOSE HEADERS: Añadir los que el frontend necesita leer
+  exposeHeaders: [
+    'authorization',
+    'content-range',
+    'x-total-count'
+  ],
+
+  // ✅ CREDENTIALS: true (CORRECTO)
   credentials: true,
+
+  // ✅ MAX AGE: Buen valor
   maxAge: 90,
 })
 
