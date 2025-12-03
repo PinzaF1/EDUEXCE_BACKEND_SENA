@@ -149,6 +149,7 @@ export default class NotificacionesService {
 
   /** Eliminar notificación individual (soft delete) */
   async eliminarUna(id_notificacion: number, id_institucion: number, id_usuario_admin: number) {
+    console.log('[NotificacionesService] eliminarUna called', { id_notificacion, id_institucion, id_usuario_admin })
     const notificacion = await Notificacion
       .query()
       .where('id_notificacion', id_notificacion)
@@ -156,15 +157,24 @@ export default class NotificacionesService {
       .first()
 
     if (!notificacion) {
+      console.warn('[NotificacionesService] eliminarUna: notificacion no encontrada', { id_notificacion, id_institucion })
       throw new Error('Notificación no encontrada')
     }
 
     // validar que el actor (usuario que elimina) exista en la tabla usuarios
     let actor: number | null = Number(id_usuario_admin)
-    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = null
-    else {
+    console.log('[NotificacionesService] eliminarUna: actor raw value', { actor })
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) {
+      actor = null
+      console.log('[NotificacionesService] eliminarUna: actor invalid, set null')
+    } else {
       const u = await Usuario.query().where('id_usuario', actor).first()
-      if (!u) actor = null
+      if (!u) {
+        actor = null
+        console.log('[NotificacionesService] eliminarUna: actor not found in usuarios, set null')
+      } else {
+        console.log('[NotificacionesService] eliminarUna: actor found', { id_usuario: actor })
+      }
     }
 
     await notificacion
@@ -175,22 +185,28 @@ export default class NotificacionesService {
       })
       .save()
 
+    console.log('[NotificacionesService] eliminarUna: notificacion marcado como eliminada', { id_notificacion, eliminadaPor: actor })
     return { success: true, mensaje: 'Notificación eliminada correctamente' }
   }
 
   /** Eliminar múltiples notificaciones (soft delete) */
   async eliminarMultiples(ids: number[], id_institucion: number, id_usuario_admin: number) {
+    console.log('[NotificacionesService] eliminarMultiples called', { ids, id_institucion, id_usuario_admin })
     if (!ids || !Array.isArray(ids) || !ids.length) {
+      console.warn('[NotificacionesService] eliminarMultiples: no ids provided')
       throw new Error('No se proporcionaron IDs')
     }
 
     // Sanitizar y validar IDs
     const validIds = ids.map((i: any) => Number(i)).filter((n: number) => Number.isFinite(n) && !Number.isNaN(n)).map((n: number) => Math.trunc(n))
+    console.log('[NotificacionesService] eliminarMultiples: validIds', { validIds })
     if (!validIds.length) {
+      console.warn('[NotificacionesService] eliminarMultiples: no valid ids after sanitization')
       throw new Error('No se encontraron IDs válidos')
     }
 
     if (validIds.length > 100) {
+      console.warn('[NotificacionesService] eliminarMultiples: too many ids', { count: validIds.length })
       throw new Error('Máximo 100 notificaciones por operación')
     }
 
@@ -201,13 +217,22 @@ export default class NotificacionesService {
 
     const idsEncontrados = notificaciones.map((n: any) => Number(n.id_notificacion))
     const idsFallidos = validIds.filter(id => !idsEncontrados.includes(id))
+    console.log('[NotificacionesService] eliminarMultiples: idsEncontrados', { idsEncontrados, idsFallidos })
 
     // validar que el actor exista en la tabla usuarios; si no existe, usar null
     let actor: number | null = Number(id_usuario_admin)
-    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = null
-    else {
+    console.log('[NotificacionesService] eliminarMultiples: actor raw value', { actor })
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) {
+      actor = null
+      console.log('[NotificacionesService] eliminarMultiples: actor invalid, set null')
+    } else {
       const u = await Usuario.query().where('id_usuario', actor).first()
-      if (!u) actor = null
+      if (!u) {
+        actor = null
+        console.log('[NotificacionesService] eliminarMultiples: actor not found in usuarios, set null')
+      } else {
+        console.log('[NotificacionesService] eliminarMultiples: actor found', { id_usuario: actor })
+      }
     }
 
     const affected = await Notificacion
@@ -218,6 +243,7 @@ export default class NotificacionesService {
         eliminadaEn: new Date(),
         eliminadaPor: actor,
       })
+    console.log('[NotificacionesService] eliminarMultiples: update affected', { affected, actor })
 
     if (idsFallidos.length > 0) {
       return {
@@ -266,12 +292,21 @@ export default class NotificacionesService {
     // Límite de seguridad: máximo 1000 por operación
     query.limit(1000)
 
+    console.log('[NotificacionesService] eliminarTodas called', { id_institucion, id_usuario_admin, filtros })
     // validar que el actor exista en la tabla usuarios; si no existe, usar null
     let actor: number | null = Number(id_usuario_admin)
-    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = null
-    else {
+    console.log('[NotificacionesService] eliminarTodas: actor raw value', { actor })
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) {
+      actor = null
+      console.log('[NotificacionesService] eliminarTodas: actor invalid, set null')
+    } else {
       const u = await Usuario.query().where('id_usuario', actor).first()
-      if (!u) actor = null
+      if (!u) {
+        actor = null
+        console.log('[NotificacionesService] eliminarTodas: actor not found in usuarios, set null')
+      } else {
+        console.log('[NotificacionesService] eliminarTodas: actor found', { id_usuario: actor })
+      }
     }
 
     const affected = await query.update({
