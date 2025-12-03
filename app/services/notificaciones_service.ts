@@ -140,8 +140,10 @@ export default class NotificacionesService {
   }
 
   async marcarLeidas(ids: number[]) {
-    if (!ids?.length) return 0
-    const affected = await Notificacion.query().whereIn('id_notificacion', ids).update({ leida: true })
+    if (!ids || !Array.isArray(ids) || !ids.length) return 0
+    const validIds = ids.map((i: any) => Number(i)).filter((n: number) => Number.isFinite(n) && !Number.isNaN(n)).map((n: number) => Math.trunc(n))
+    if (!validIds.length) return 0
+    const affected = await Notificacion.query().whereIn('id_notificacion', validIds).update({ leida: true })
     return affected
   }
 
@@ -157,11 +159,19 @@ export default class NotificacionesService {
       throw new Error('Notificación no encontrada')
     }
 
+    // validar que el actor (usuario que elimina) exista en la tabla usuarios
+    let actor: number | null = Number(id_usuario_admin)
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = null
+    else {
+      const u = await Usuario.query().where('id_usuario', actor).first()
+      if (!u) actor = null
+    }
+
     await notificacion
       .merge({
         eliminada: true,
         eliminadaEn: new Date() as any,
-        eliminadaPor: id_usuario_admin,
+        eliminadaPor: actor,
       })
       .save()
 
@@ -170,21 +180,35 @@ export default class NotificacionesService {
 
   /** Eliminar múltiples notificaciones (soft delete) */
   async eliminarMultiples(ids: number[], id_institucion: number, id_usuario_admin: number) {
-    if (!ids?.length) {
+    if (!ids || !Array.isArray(ids) || !ids.length) {
       throw new Error('No se proporcionaron IDs')
     }
 
-    if (ids.length > 100) {
+    // Sanitizar y validar IDs
+    const validIds = ids.map((i: any) => Number(i)).filter((n: number) => Number.isFinite(n) && !Number.isNaN(n)).map((n: number) => Math.trunc(n))
+    if (!validIds.length) {
+      throw new Error('No se encontraron IDs válidos')
+    }
+
+    if (validIds.length > 100) {
       throw new Error('Máximo 100 notificaciones por operación')
     }
 
     const notificaciones = await Notificacion
       .query()
-      .whereIn('id_notificacion', ids)
+      .whereIn('id_notificacion', validIds)
       .where('id_institucion', id_institucion)
 
-    const idsEncontrados = notificaciones.map((n: any) => n.id_notificacion)
-    const idsFallidos = ids.filter(id => !idsEncontrados.includes(id))
+    const idsEncontrados = notificaciones.map((n: any) => Number(n.id_notificacion))
+    const idsFallidos = validIds.filter(id => !idsEncontrados.includes(id))
+
+    // validar que el actor exista en la tabla usuarios; si no existe, usar null
+    let actor: number | null = Number(id_usuario_admin)
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = null
+    else {
+      const u = await Usuario.query().where('id_usuario', actor).first()
+      if (!u) actor = null
+    }
 
     const affected = await Notificacion
       .query()
@@ -192,7 +216,7 @@ export default class NotificacionesService {
       .update({
         eliminada: true,
         eliminadaEn: new Date(),
-        eliminadaPor: id_usuario_admin,
+        eliminadaPor: actor,
       })
 
     if (idsFallidos.length > 0) {
@@ -200,7 +224,7 @@ export default class NotificacionesService {
         success: true,
         eliminadas: affected,
         fallidas: idsFallidos.length,
-        mensaje: `${affected} de ${ids.length} notificaciones eliminadas`,
+        mensaje: `${affected} de ${validIds.length} notificaciones eliminadas`,
         errores: idsFallidos.map(id => ({ id, error: 'Notificación no encontrada' })),
       }
     }
@@ -242,10 +266,18 @@ export default class NotificacionesService {
     // Límite de seguridad: máximo 1000 por operación
     query.limit(1000)
 
+    // validar que el actor exista en la tabla usuarios; si no existe, usar null
+    let actor: number | null = Number(id_usuario_admin)
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) actor = null
+    else {
+      const u = await Usuario.query().where('id_usuario', actor).first()
+      if (!u) actor = null
+    }
+
     const affected = await query.update({
       eliminada: true,
       eliminadaEn: new Date(),
-      eliminadaPor: id_usuario_admin,
+      eliminadaPor: actor,
     })
 
     return {
