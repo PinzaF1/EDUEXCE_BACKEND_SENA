@@ -1,4 +1,5 @@
 // app/services/notificaciones_service.ts
+import { DateTime } from 'luxon'
 import Notificacion from '../models/notificacione.js'
 import Usuario from '../models/usuario.js'
 import Sesion from '../models/sesione.js'
@@ -180,7 +181,7 @@ export default class NotificacionesService {
     await notificacion
       .merge({
         eliminada: true,
-        eliminadaEn: new Date() as any,
+        eliminadaEn: DateTime.now(),
         eliminadaPor: actor,
       })
       .save()
@@ -240,7 +241,7 @@ export default class NotificacionesService {
       .whereIn('id_notificacion', idsEncontrados)
       .update({
         eliminada: true,
-        eliminadaEn: new Date(),
+        eliminadaEn: DateTime.now(),
         eliminadaPor: actor,
       })
     console.log('[NotificacionesService] eliminarMultiples: update affected', { affected, actor })
@@ -311,7 +312,7 @@ export default class NotificacionesService {
 
     const affected = await query.update({
       eliminada: true,
-      eliminadaEn: new Date(),
+      eliminadaEn: DateTime.now(),
       eliminadaPor: actor,
     })
 
