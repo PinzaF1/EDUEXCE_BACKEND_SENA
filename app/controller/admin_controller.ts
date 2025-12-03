@@ -190,6 +190,13 @@ public async editarEstudiante({ request, response }: HttpContext) {
   public async eliminarNotificacion({ request, response, params }: HttpContext) {
     try {
       const auth = (request as any).authUsuario
+      const authHeader = String(request.header('authorization') || request.header('Authorization') || '')
+      console.log('[AdminController] eliminarNotificacion called', {
+        params: { id: params.id },
+        authSummary: { rol: auth?.rol ?? null, id_institucion: auth?.id_institucion ?? null, id_usuario: auth?.id_usuario ?? null },
+        authorization_present: !!authHeader,
+        authorization_len: authHeader.length,
+      })
       const id = Number(params.id)
       
       if (!id || isNaN(id)) {
@@ -217,6 +224,13 @@ public async editarEstudiante({ request, response }: HttpContext) {
   public async eliminarNotificacionesMultiples({ request, response }: HttpContext) {
     try {
       const auth = (request as any).authUsuario
+      const authHeader = String(request.header('authorization') || request.header('Authorization') || '')
+      console.log('[AdminController] eliminarNotificacionesMultiples called', {
+        bodySummary: { ids: Array.isArray(request.body()?.ids) ? (request.body() as any).ids : undefined },
+        authSummary: { rol: auth?.rol ?? null, id_institucion: auth?.id_institucion ?? null, id_usuario: auth?.id_usuario ?? null },
+        authorization_present: !!authHeader,
+        authorization_len: authHeader.length,
+      })
       const { ids } = request.body() as any
 
       if (!Array.isArray(ids)) {
