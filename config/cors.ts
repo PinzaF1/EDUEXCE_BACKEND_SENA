@@ -15,6 +15,10 @@ const corsConfig = defineConfig({
   'http://52.20.236.109',
   'http://52.20.236.109:3333',
   'https://eduexcelsena-omega.vercel.app', // <--- agregar Vercel
+
+  // ✅ Nuevas URLs de Vercel
+    'https://eduexce-aws-demo.vercel.app',                                    // Producción
+    'https://eduexce-aws-demo-mifdrnyub-yare-cntrls-projects.vercel.app',
 ],
 
   // ✅ MÉTODOS: Incluir PATCH si es necesario
