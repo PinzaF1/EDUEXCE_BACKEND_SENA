@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node ace build --ignore-ts-errors",
     "start": "node build/bin/server.js",
-    "postbuild": "sh -c 'cp .env build/.env 2>/dev/null || echo No local .env to copy'",
+    "postbuild": "sh -c 'cp .env build/.env 2>/dev/null || echo No local .env to copy; mkdir -p build/config && cp config/firebase-admin-sdk.json build/config/firebase-admin-sdk.json 2>/dev/null || echo No firebase config to copy'",
     "dev": "node ace serve --hmr",
     "test": "cross-env NODE_ENV=test node ace test",
     "test:watch": "cross-env NODE_ENV=test node ace test --watch",
@@ -20,7 +20,7 @@
     "typecheck": "tsc --noEmit"
   },
   "imports": {
-    "#controllers/*": "./app/controllers/*.js",
+    "#controllers/*": "./app/controller/*.js",
     "#exceptions/*": "./app/exceptions/*.js",
     "#models/*": "./app/models/*.js",
     "#mails/*": "./app/mails/*.js",
@@ -75,6 +75,7 @@
     "bcryptjs": "^3.0.2",
     "csv-parse": "^6.1.0",
     "csv-parser": "^3.2.0",
+    "dotenv": "^17.2.3",
     "firebase-admin": "^13.5.0",
     "ioredis": "^5.8.2",
     "jsonwebtoken": "^9.0.2",
@@ -90,7 +91,7 @@
   },
   "hotHook": {
     "boundaries": [
-      "./app/controllers/**/*.ts",
+      "./app/controller/**/*.ts",
       "./app/middleware/*.ts"
     ]
   },

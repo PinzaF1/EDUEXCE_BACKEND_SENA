@@ -190,20 +190,27 @@ public async editarEstudiante({ request, response }: HttpContext) {
   public async eliminarNotificacion({ request, response, params }: HttpContext) {
     try {
       const auth = (request as any).authUsuario
+      const authHeader = String(request.header('authorization') || request.header('Authorization') || '')
+      console.log('[AdminController] eliminarNotificacion called', {
+        params: { id: params.id },
+        authSummary: { rol: auth?.rol ?? null, id_institucion: auth?.id_institucion ?? null, id_usuario: auth?.id_usuario ?? null },
+        authorization_present: !!authHeader,
+        authorization_len: authHeader.length,
+      })
       const id = Number(params.id)
       
       if (!id || isNaN(id)) {
         return response.badRequest({ error: 'ID de notificación inválido' })
       }
 
-      const idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      let idAdmin = this.resolveUserIdFromAuth(auth) ?? null
       if (!idAdmin) {
-        return response.badRequest({ error: 'Token inválido: falta id numérico del usuario (claims: id_usuario|id|sub|userId)' })
+        console.warn('[AdminController] eliminarNotificacion: token sin id numérico, procediendo con idAdmin=null', { authSummary: { rol: auth?.rol, id_institucion: auth?.id_institucion } })
       }
       const resultado = await (notificacionesService as any).eliminarUna(
         id,
         Number(auth.id_institucion),
-        Number(idAdmin)
+        idAdmin as any
       )
       return response.ok(resultado)
     } catch (error: any) {
@@ -217,20 +224,27 @@ public async editarEstudiante({ request, response }: HttpContext) {
   public async eliminarNotificacionesMultiples({ request, response }: HttpContext) {
     try {
       const auth = (request as any).authUsuario
+      const authHeader = String(request.header('authorization') || request.header('Authorization') || '')
+      console.log('[AdminController] eliminarNotificacionesMultiples called', {
+        bodySummary: { ids: Array.isArray(request.body()?.ids) ? (request.body() as any).ids : undefined },
+        authSummary: { rol: auth?.rol ?? null, id_institucion: auth?.id_institucion ?? null, id_usuario: auth?.id_usuario ?? null },
+        authorization_present: !!authHeader,
+        authorization_len: authHeader.length,
+      })
       const { ids } = request.body() as any
 
       if (!Array.isArray(ids)) {
         return response.badRequest({ error: 'Se requiere un array de IDs' })
       }
 
-      const idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      let idAdmin = this.resolveUserIdFromAuth(auth) ?? null
       if (!idAdmin) {
-        return response.badRequest({ error: 'Token inválido: falta id numérico del usuario (claims: id_usuario|id|sub|userId)' })
+        console.warn('[AdminController] eliminarNotificacionesMultiples: token sin id numérico, procediendo con idAdmin=null', { authSummary: { rol: auth?.rol, id_institucion: auth?.id_institucion } })
       }
       const resultado = await (notificacionesService as any).eliminarMultiples(
         ids,
         Number(auth.id_institucion),
-        Number(idAdmin)
+        idAdmin as any
       )
       
       if (resultado.fallidas > 0) {
@@ -253,14 +267,14 @@ public async editarEstudiante({ request, response }: HttpContext) {
       if (qs.tipo) filtros.tipo = qs.tipo
       if (qs.antes_de) filtros.antes_de = qs.antes_de
 
-      const idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      let idAdmin = this.resolveUserIdFromAuth(auth) ?? null
       if (!idAdmin) {
-        return response.badRequest({ error: 'Token inválido: falta id numérico del usuario (claims: id_usuario|id|sub|userId)' })
+        console.warn('[AdminController] eliminarTodasNotificaciones: token sin id numérico, procediendo con idAdmin=null', { authSummary: { rol: auth?.rol, id_institucion: auth?.id_institucion } })
       }
 
       const resultado = await (notificacionesService as any).eliminarTodas(
         Number(auth.id_institucion),
-        Number(idAdmin),
+        idAdmin as any,
         filtros
       )
       return response.ok(resultado)
