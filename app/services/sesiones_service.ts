@@ -1929,7 +1929,7 @@ public async ProgresoDiagnostico(
     const puntajeGlobal = esMixto || esSimArea ? this.icfes(porcentaje) : porcentaje
     const escala: 'ICFES' | 'porcentaje' = (esMixto || esSimArea) ? 'ICFES' : 'porcentaje'
     
-    // Análisis con fallback local
+    // Análisis completo para preguntas de IA
     const calcLocalIA = () => {
       const porSubtema = new Map<string, { total: number; ok: number }>()
       for (const p of preguntas) {
@@ -1945,13 +1945,36 @@ public async ProgresoDiagnostico(
       for (const [st, agg] of porSubtema.entries()) {
         const pct = agg.total ? Math.round((agg.ok / agg.total) * 100) : 0
         if (pct >= 80) fuertes.push(st)
-        else debiles.push(st)
+        else if (pct < 60) debiles.push(st)
       }
       
-      return { fuertes, debiles, recs: [] }
+      // Generar fortalezas descriptivas
+      const fortalezasDesc = fuertes.map(st => `Buen dominio de ${st}`)
+      
+      // Generar mejoras específicas por subtema débil
+      const mejoras: string[] = []
+      for (const st of debiles.slice(0, 3)) {
+        mejoras.push(`Repasar conceptos fundamentales de ${st}`)
+        mejoras.push(`Practicar más ejercicios de ${st}`)
+      }
+      
+      // Generar recomendaciones prácticas
+      const recs: string[] = []
+      for (const st of debiles.slice(0, 2)) {
+        recs.push(`Dedicar 15-20 minutos diarios a estudiar ${st}`)
+        recs.push(`Ver videos educativos sobre ${st}`)
+        recs.push(`Crear tarjetas de memoria (flashcards) de ${st}`)
+      }
+      // Agregar recomendaciones generales
+      if (debiles.length > 0) {
+        recs.push('Programar una sesión de repaso de errores en 48-72 horas')
+        recs.push('Realizar un mini simulacro de 10 preguntas para medir el progreso')
+      }
+      
+      return { fuertes: fortalezasDesc, debiles, mejoras, recs }
     }
     
-    const { fuertes, debiles } = calcLocalIA()
+    const { fuertes, debiles, mejoras, recs } = calcLocalIA()
     
     return {
       header: {
@@ -1968,7 +1991,7 @@ public async ProgresoDiagnostico(
       },
       resumen: { cambio: 'igual', mensaje: 'Resultado calculado', nivelActual: Number(row.nivel_orden ?? null) },
       preguntas,
-      analisis: { fortalezas: fuertes, subtemas_a_mejorar: debiles, mejoras: [], recomendaciones: [] },
+      analisis: { fortalezas: fuertes, subtemas_a_mejorar: debiles, mejoras, recomendaciones: recs },
     }
   }
   // ====================================================================
@@ -2078,6 +2101,7 @@ public async ProgresoDiagnostico(
   // ======== IA con fallback seguro ========
   let fortalezas: string[] = []
   let subtemas_a_mejorar: string[] = []
+  let mejoras: string[] = []
   let recomendaciones: string[] = []
 
   // Fallback local (por si IA falla): agrupa por subtema y calcula %
@@ -2095,8 +2119,15 @@ public async ProgresoDiagnostico(
     const debiles: string[] = []
     for (const [st, agg] of porSubtema.entries()) {
       const pct = agg.total ? Math.round((agg.ok / agg.total) * 100) : 0
-      if (pct >= 80) fuertes.push(st)
-      else debiles.push(st)
+      if (pct >= 80) fuertes.push(`Buen dominio de ${st}`)
+      else if (pct < 60) debiles.push(st)
+    }
+
+    // Mejoras específicas por subtema débil
+    const mejoras: string[] = []
+    for (const st of debiles.slice(0, 3)) {
+      mejoras.push(`Repasar conceptos fundamentales de ${st}`)
+      mejoras.push(`Practicar más ejercicios de ${st}`)
     }
 
     // Recomendaciones diversas (máx 2 subtemas débiles)
@@ -2104,24 +2135,22 @@ public async ProgresoDiagnostico(
       const tag = st.trim()
       return [
         `Repasa ${tag} durante 15–20 minutos enfocándote en definiciones y ejemplos base.`,
-        `Resuelve 10–12 preguntas de ${tag} y revisa las explicaciones, registrando por qué te equivocaste.`,
         `Crea 5 tarjetas tipo flashcard de ${tag} y repásalas mañana (repetición espaciada).`,
-        `Escribe un mini resumen de 3–5 puntos sobre ${tag} y explícalo en voz alta (método Feynman).`,
-        `Haz práctica cronometrada de ${tag} (1–2 bloques de 10 minutos) para ganar velocidad y precisión.`,
-        `Alterna ${tag} con otro subtema fuerte para intercalar práctica y consolidar (interleaving).`,
+        `Haz práctica cronometrada de ${tag} (1–2 bloques de 10 minutos) para ganar velocidad.`,
       ]
     }
     const picks = debiles.slice(0, 2)
     const recs: string[] = []
     for (const st of picks) recs.push(...mk(st))
     // Hábitos generales
-    recs.push(
-      'Programa una sesión de repaso de errores en 48–72 horas.',
-      'Realiza un mini simulacro de 10 preguntas y compara resultados con esta sesión.',
-      'Aplica la técnica Pomodoro (25/5) en dos sesiones adicionales esta semana.'
-    )
+    if (debiles.length > 0) {
+      recs.push(
+        'Programa una sesión de repaso de errores en 48–72 horas.',
+        'Realiza un mini simulacro de 10 preguntas y compara resultados con esta sesión.'
+      )
+    }
 
-    return { fuertes, debiles, recs }
+    return { fuertes, debiles, mejoras, recs }
   }
 
   try {
@@ -2159,6 +2188,7 @@ public async ProgresoDiagnostico(
       } else {
         const loc = calcLocal()
         recomendaciones = [...rIA, ...loc.recs.slice(0, 3)]
+        mejoras = loc.mejoras
         if (!fortalezas.length) fortalezas = loc.fuertes
         if (!subtemas_a_mejorar.length) subtemas_a_mejorar = loc.debiles
       }
@@ -2166,6 +2196,7 @@ public async ProgresoDiagnostico(
       const loc = calcLocal()
       fortalezas = loc.fuertes
       subtemas_a_mejorar = loc.debiles
+      mejoras = loc.mejoras
       recomendaciones = loc.recs
     }
   } catch (err) {
@@ -2174,6 +2205,7 @@ public async ProgresoDiagnostico(
     const loc = calcLocal()
     fortalezas = loc.fuertes
     subtemas_a_mejorar = loc.debiles
+    mejoras = loc.mejoras
     recomendaciones = loc.recs
   }
   // ========================================
@@ -2220,8 +2252,8 @@ public async ProgresoDiagnostico(
     preguntas,
     analisis: {
       fortalezas,
-      subtemas_a_mejorar,          // nombre esperado por el front
-      mejoras: subtemas_a_mejorar, // compatibilidad hacia atrás
+      subtemas_a_mejorar,
+      mejoras,
       recomendaciones,
      },
    }
