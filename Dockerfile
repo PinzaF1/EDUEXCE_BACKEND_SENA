@@ -1,3 +1,21 @@
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
+# Copy built app
+COPY --from=builder /app/build ./build
+# Do NOT copy service account into image; mount it at runtime for security.
+EXPOSE 3333
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD wget --quiet --tries=1 --spider http://localhost:3333/health || exit 1
+CMD ["node", "build/bin/server.js"]
 # depspliegue
 FROM node:20-alpine AS deps
 WORKDIR /app
