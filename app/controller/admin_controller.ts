@@ -12,6 +12,16 @@ const notificacionesService = new NotificacionesService()
 const perfilService = new PerfilService()
 
 class AdminController {
+  // helper: resolver id numérico del usuario desde el payload JWT
+  private resolveUserIdFromAuth(auth: any): number | null {
+    if (!auth) return null
+    const candidates = [auth.id_usuario, auth.id, auth.sub, auth.userId, auth.user_id]
+    for (const c of candidates) {
+      const n = Number(c)
+      if (Number.isFinite(n) && !Number.isNaN(n)) return Math.trunc(n)
+    }
+    return null
+  }
   // ===== Estudiantes =====
   public async listarEstudiantes({ request, response }: HttpContext) {
     const auth = (request as any).authUsuario
@@ -154,6 +164,7 @@ public async editarEstudiante({ request, response }: HttpContext) {
       limit: qs.limit ? Number(qs.limit) : 50,
       desde: qs.desde || undefined,
       hasta: qs.hasta || undefined,
+      incluir_eliminadas: qs.incluir_eliminadas === 'true',
     }
     
     // Filtro de leída: acepta 'true', 'false', o undefined (todas)
@@ -174,6 +185,102 @@ public async editarEstudiante({ request, response }: HttpContext) {
     const { ids } = request.body() as any
     const n = await (notificacionesService as any).marcarLeidas(Array.isArray(ids) ? ids : [])
     return response.ok({ marcadas: n })
+  }
+
+  public async eliminarNotificacion({ request, response, params }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const authHeader = String(request.header('authorization') || request.header('Authorization') || '')
+      console.log('[AdminController] eliminarNotificacion called', {
+        params: { id: params.id },
+        authSummary: { rol: auth?.rol ?? null, id_institucion: auth?.id_institucion ?? null, id_usuario: auth?.id_usuario ?? null },
+        authorization_present: !!authHeader,
+        authorization_len: authHeader.length,
+      })
+      const id = Number(params.id)
+      
+      if (!id || isNaN(id)) {
+        return response.badRequest({ error: 'ID de notificación inválido' })
+      }
+
+      let idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      if (!idAdmin) {
+        console.warn('[AdminController] eliminarNotificacion: token sin id numérico, procediendo con idAdmin=null', { authSummary: { rol: auth?.rol, id_institucion: auth?.id_institucion } })
+      }
+      const resultado = await (notificacionesService as any).eliminarUna(
+        id,
+        Number(auth.id_institucion),
+        idAdmin as any
+      )
+      return response.ok(resultado)
+    } catch (error: any) {
+      if (error.message === 'Notificación no encontrada') {
+        return response.notFound({ error: error.message })
+      }
+      return response.badRequest({ error: error.message || 'Error al eliminar notificación' })
+    }
+  }
+
+  public async eliminarNotificacionesMultiples({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const authHeader = String(request.header('authorization') || request.header('Authorization') || '')
+      console.log('[AdminController] eliminarNotificacionesMultiples called', {
+        bodySummary: { ids: Array.isArray(request.body()?.ids) ? (request.body() as any).ids : undefined },
+        authSummary: { rol: auth?.rol ?? null, id_institucion: auth?.id_institucion ?? null, id_usuario: auth?.id_usuario ?? null },
+        authorization_present: !!authHeader,
+        authorization_len: authHeader.length,
+      })
+      const { ids } = request.body() as any
+
+      if (!Array.isArray(ids)) {
+        return response.badRequest({ error: 'Se requiere un array de IDs' })
+      }
+
+      let idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      if (!idAdmin) {
+        console.warn('[AdminController] eliminarNotificacionesMultiples: token sin id numérico, procediendo con idAdmin=null', { authSummary: { rol: auth?.rol, id_institucion: auth?.id_institucion } })
+      }
+      const resultado = await (notificacionesService as any).eliminarMultiples(
+        ids,
+        Number(auth.id_institucion),
+        idAdmin as any
+      )
+      
+      if (resultado.fallidas > 0) {
+        return response.status(207).json(resultado)
+      }
+      
+      return response.ok(resultado)
+    } catch (error: any) {
+      return response.badRequest({ error: error.message || 'Error al eliminar notificaciones' })
+    }
+  }
+
+  public async eliminarTodasNotificaciones({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      const qs = request.qs()
+      
+      const filtros: any = {}
+      if (qs.leidas_solamente === 'true') filtros.leidas_solamente = true
+      if (qs.tipo) filtros.tipo = qs.tipo
+      if (qs.antes_de) filtros.antes_de = qs.antes_de
+
+      let idAdmin = this.resolveUserIdFromAuth(auth) ?? null
+      if (!idAdmin) {
+        console.warn('[AdminController] eliminarTodasNotificaciones: token sin id numérico, procediendo con idAdmin=null', { authSummary: { rol: auth?.rol, id_institucion: auth?.id_institucion } })
+      }
+
+      const resultado = await (notificacionesService as any).eliminarTodas(
+        Number(auth.id_institucion),
+        idAdmin as any,
+        filtros
+      )
+      return response.ok(resultado)
+    } catch (error: any) {
+      return response.badRequest({ error: error.message || 'Error al eliminar notificaciones' })
+    }
   }
 
   // ===== Perfil institución =====

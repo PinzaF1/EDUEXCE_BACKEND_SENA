@@ -1032,7 +1032,7 @@ public async ProgresoDiagnostico(
   if (usandoIA) {
     // Guardar preguntas de IA en JSONB (convertir a string JSON)
     ;(sesion as any).preguntas_generadas = JSON.stringify(preguntasGeneradasJSONB)
-    await sesion.save()
+    await (sesion as any).save()
     console.log(`[crearParada] Preguntas de IA guardadas en JSONB para sesión ${id_sesion}`)
   } else {
     // Guardar referencias en sesiones_detalles (BD local)
@@ -1248,7 +1248,7 @@ public async ProgresoDiagnostico(
 
   let correctas = 0
   const detalleResumen: Array<{
-    id_pregunta: number
+    id_pregunta: number | null
     orden: number
     correcta: string | null
     marcada: string | null
@@ -1350,6 +1350,12 @@ public async ProgresoDiagnostico(
     (correctas * 100) / Math.max(1, Number((ses as any).total_preguntas) || 5)
   )
   ;(ses as any).fin_at = DateTime.now()
+  
+  // ========== PERSISTIR detalleResumen para preguntas de IA ==========
+  // Guardar el detalle de respuestas en JSONB para que detalleSesion pueda recuperarlo
+  ;(ses as any).detalle_resumen = JSON.stringify(detalleResumen)
+  // ====================================================================
+  
   await ses.save()
 
   const inicio = (ses as any).inicio_at ? DateTime.fromISO(String((ses as any).inicio_at)) : null
@@ -1845,7 +1851,152 @@ public async ProgresoDiagnostico(
     .where('id_sesion', id_sesion)
     .orderBy('orden', 'asc')
 
-  // Si no hay detalles, retorna estructura mínima consistente (sin IA)
+  // ========== DETECTAR SI USA PREGUNTAS DE IA (JSONB) ==========
+  const preguntasGeneradasRaw = (row as any).preguntas_generadas
+  let preguntasGeneradas: any[] = []
+  
+  if (preguntasGeneradasRaw) {
+    try {
+      preguntasGeneradas = typeof preguntasGeneradasRaw === 'string' 
+        ? JSON.parse(preguntasGeneradasRaw) 
+        : preguntasGeneradasRaw
+    } catch {
+      preguntasGeneradas = []
+    }
+  }
+  
+  const usandoIA = Array.isArray(preguntasGeneradas) && preguntasGeneradas.length > 0
+  
+  // Parsear detalle_resumen si existe (guardado al cerrar sesión)
+  const detalleResumenRaw = (row as any).detalle_resumen
+  let detalleResumen: any[] = []
+  
+  if (detalleResumenRaw) {
+    try {
+      detalleResumen = typeof detalleResumenRaw === 'string'
+        ? JSON.parse(detalleResumenRaw)
+        : detalleResumenRaw
+    } catch {
+      detalleResumen = []
+    }
+  }
+  
+  // ========== CASO IA: Usar JSONB en lugar de sesiones_detalles ==========
+  if (usandoIA && (!Array.isArray(detalles) || detalles.length === 0)) {
+    console.log(`[detalleSesion] Sesión ${id_sesion} usa preguntas de IA (JSONB)`)
+    
+    // Mapear respuestas evaluadas por orden
+    const respuestasPorOrden = new Map<number, any>()
+    for (const r of detalleResumen) {
+      respuestasPorOrden.set(Number(r.orden), r)
+    }
+    
+    // Construir preguntas desde JSONB
+    const preguntas = preguntasGeneradas.map((pregIA: any) => {
+      const orden = Number(pregIA.orden)
+      const resp = respuestasPorOrden.get(orden) || {}
+      
+      return {
+        orden,
+        id_pregunta: null, // Preguntas de IA no tienen id en BD
+        area: pregIA.area || row.area || null,
+        subtema: pregIA.subtema || row.subtema || null,
+        enunciado: pregIA.pregunta || pregIA.enunciado || null,
+        correcta: String(pregIA.respuesta_correcta || '').trim().toUpperCase() || null,
+        marcada: resp.marcada || null,
+        es_correcta: resp.es_correcta || false,
+        explicacion: pregIA.explicacion || null,
+        tiempo_empleado_seg: resp.tiempo_empleado_seg || null,
+      }
+    })
+    
+    const correctas = preguntas.filter((p: any) => p.es_correcta).length
+    const totalPreguntas = Number(row.total_preguntas || preguntas.length || 0)
+    const porcentaje = Number(
+      row.puntaje_porcentaje ?? Math.round((correctas * 100) / Math.max(1, totalPreguntas))
+    )
+    const nivelActual = this.nivelNombre(porcentaje)
+    
+    // Calcular tiempo total
+    const ini = row.inicio_at ? DateTime.fromISO(String(row.inicio_at)) : null
+    const fin = row.fin_at ? DateTime.fromISO(String(row.fin_at)) : null
+    const tiempoTotalSeg = ini && fin ? Math.max(0, Math.round(fin.diff(ini, 'seconds').seconds)) : 0
+    
+    // Header/escala
+    const esMixto = String(row.tipo) === 'simulacro_mixto'
+    const esSimArea = String(row.tipo) === 'simulacro'
+    const headerMateria = esMixto ? 'Todas las áreas' : String(row.area || 'General')
+    const puntajeGlobal = esMixto || esSimArea ? this.icfes(porcentaje) : porcentaje
+    const escala: 'ICFES' | 'porcentaje' = (esMixto || esSimArea) ? 'ICFES' : 'porcentaje'
+    
+    // Análisis completo para preguntas de IA
+    const calcLocalIA = () => {
+      const porSubtema = new Map<string, { total: number; ok: number }>()
+      for (const p of preguntas) {
+        const st = ((p as any).subtema || 'General').trim() || 'General'
+        const v = porSubtema.get(st) || { total: 0, ok: 0 }
+        v.total += 1
+        if ((p as any).es_correcta) v.ok += 1
+        porSubtema.set(st, v)
+      }
+      
+      const fuertes: string[] = []
+      const debiles: string[] = []
+      for (const [st, agg] of porSubtema.entries()) {
+        const pct = agg.total ? Math.round((agg.ok / agg.total) * 100) : 0
+        if (pct >= 80) fuertes.push(st)
+        else if (pct < 60) debiles.push(st)
+      }
+      
+      // Generar fortalezas descriptivas
+      const fortalezasDesc = fuertes.map(st => `Buen dominio de ${st}`)
+      
+      // Generar mejoras específicas por subtema débil
+      const mejoras: string[] = []
+      for (const st of debiles.slice(0, 3)) {
+        mejoras.push(`Repasar conceptos fundamentales de ${st}`)
+        mejoras.push(`Practicar más ejercicios de ${st}`)
+      }
+      
+      // Generar recomendaciones prácticas
+      const recs: string[] = []
+      for (const st of debiles.slice(0, 2)) {
+        recs.push(`Dedicar 15-20 minutos diarios a estudiar ${st}`)
+        recs.push(`Ver videos educativos sobre ${st}`)
+        recs.push(`Crear tarjetas de memoria (flashcards) de ${st}`)
+      }
+      // Agregar recomendaciones generales
+      if (debiles.length > 0) {
+        recs.push('Programar una sesión de repaso de errores en 48-72 horas')
+        recs.push('Realizar un mini simulacro de 10 preguntas para medir el progreso')
+      }
+      
+      return { fuertes: fortalezasDesc, debiles, mejoras, recs }
+    }
+    
+    const { fuertes, debiles, mejoras, recs } = calcLocalIA()
+    
+    return {
+      header: {
+        materia: headerMateria,
+        fecha: row.fin_at ?? row.inicio_at,
+        nivel: nivelActual,
+        nivelOrden: Number(row.nivel_orden ?? null),
+        puntaje: puntajeGlobal,
+        escala,
+        tiempo_total_seg: tiempoTotalSeg,
+        correctas,
+        incorrectas: totalPreguntas - correctas,
+        total: totalPreguntas,
+      },
+      resumen: { cambio: 'igual', mensaje: 'Resultado calculado', nivelActual: Number(row.nivel_orden ?? null) },
+      preguntas,
+      analisis: { fortalezas: fuertes, subtemas_a_mejorar: debiles, mejoras, recomendaciones: recs },
+    }
+  }
+  // ====================================================================
+
+  // Si no hay detalles (y tampoco IA), retorna estructura mínima
   if (!Array.isArray(detalles) || detalles.length === 0) {
     const headerMateriaFallback =
       String(row.tipo) === 'simulacro_mixto' ? 'Todas las áreas' : String(row.area || 'General')
@@ -1950,6 +2101,7 @@ public async ProgresoDiagnostico(
   // ======== IA con fallback seguro ========
   let fortalezas: string[] = []
   let subtemas_a_mejorar: string[] = []
+  let mejoras: string[] = []
   let recomendaciones: string[] = []
 
   // Fallback local (por si IA falla): agrupa por subtema y calcula %
@@ -1967,8 +2119,15 @@ public async ProgresoDiagnostico(
     const debiles: string[] = []
     for (const [st, agg] of porSubtema.entries()) {
       const pct = agg.total ? Math.round((agg.ok / agg.total) * 100) : 0
-      if (pct >= 80) fuertes.push(st)
-      else debiles.push(st)
+      if (pct >= 80) fuertes.push(`Buen dominio de ${st}`)
+      else if (pct < 60) debiles.push(st)
+    }
+
+    // Mejoras específicas por subtema débil
+    const mejoras: string[] = []
+    for (const st of debiles.slice(0, 3)) {
+      mejoras.push(`Repasar conceptos fundamentales de ${st}`)
+      mejoras.push(`Practicar más ejercicios de ${st}`)
     }
 
     // Recomendaciones diversas (máx 2 subtemas débiles)
@@ -1976,24 +2135,22 @@ public async ProgresoDiagnostico(
       const tag = st.trim()
       return [
         `Repasa ${tag} durante 15–20 minutos enfocándote en definiciones y ejemplos base.`,
-        `Resuelve 10–12 preguntas de ${tag} y revisa las explicaciones, registrando por qué te equivocaste.`,
         `Crea 5 tarjetas tipo flashcard de ${tag} y repásalas mañana (repetición espaciada).`,
-        `Escribe un mini resumen de 3–5 puntos sobre ${tag} y explícalo en voz alta (método Feynman).`,
-        `Haz práctica cronometrada de ${tag} (1–2 bloques de 10 minutos) para ganar velocidad y precisión.`,
-        `Alterna ${tag} con otro subtema fuerte para intercalar práctica y consolidar (interleaving).`,
+        `Haz práctica cronometrada de ${tag} (1–2 bloques de 10 minutos) para ganar velocidad.`,
       ]
     }
     const picks = debiles.slice(0, 2)
     const recs: string[] = []
     for (const st of picks) recs.push(...mk(st))
     // Hábitos generales
-    recs.push(
-      'Programa una sesión de repaso de errores en 48–72 horas.',
-      'Realiza un mini simulacro de 10 preguntas y compara resultados con esta sesión.',
-      'Aplica la técnica Pomodoro (25/5) en dos sesiones adicionales esta semana.'
-    )
+    if (debiles.length > 0) {
+      recs.push(
+        'Programa una sesión de repaso de errores en 48–72 horas.',
+        'Realiza un mini simulacro de 10 preguntas y compara resultados con esta sesión.'
+      )
+    }
 
-    return { fuertes, debiles, recs }
+    return { fuertes, debiles, mejoras, recs }
   }
 
   try {
@@ -2031,6 +2188,7 @@ public async ProgresoDiagnostico(
       } else {
         const loc = calcLocal()
         recomendaciones = [...rIA, ...loc.recs.slice(0, 3)]
+        mejoras = loc.mejoras
         if (!fortalezas.length) fortalezas = loc.fuertes
         if (!subtemas_a_mejorar.length) subtemas_a_mejorar = loc.debiles
       }
@@ -2038,6 +2196,7 @@ public async ProgresoDiagnostico(
       const loc = calcLocal()
       fortalezas = loc.fuertes
       subtemas_a_mejorar = loc.debiles
+      mejoras = loc.mejoras
       recomendaciones = loc.recs
     }
   } catch (err) {
@@ -2046,6 +2205,7 @@ public async ProgresoDiagnostico(
     const loc = calcLocal()
     fortalezas = loc.fuertes
     subtemas_a_mejorar = loc.debiles
+    mejoras = loc.mejoras
     recomendaciones = loc.recs
   }
   // ========================================
@@ -2092,8 +2252,8 @@ public async ProgresoDiagnostico(
     preguntas,
     analisis: {
       fortalezas,
-      subtemas_a_mejorar,          // nombre esperado por el front
-      mejoras: subtemas_a_mejorar, // compatibilidad hacia atrás
+      subtemas_a_mejorar,
+      mejoras,
       recomendaciones,
      },
    }

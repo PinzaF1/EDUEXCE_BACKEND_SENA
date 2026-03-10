@@ -1,0 +1,42 @@
+[Unit]
+Description=EduExce Backend - AdonisJS Application
+Documentation=https://github.com/PinzaF1/EDUEXCE_BACKEND_SENA
+After=network.target
+
+[Service]
+Type=exec
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/eduexce-backend
+ExecStart=/usr/bin/npm run start
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutStopSec=5
+RestartSec=5
+Restart=always
+RestartPreventExitStatus=255
+
+# Variables de entorno
+Environment=NODE_ENV=production
+Environment=PORT=3333
+Environment=HOST=0.0.0.0
+
+# Configuración de recursos
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Configuración de logs
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=eduexce-backend
+
+# Configuración de seguridad
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/ubuntu/eduexce-backend
+
+[Install]
+WantedBy=multi-user.target

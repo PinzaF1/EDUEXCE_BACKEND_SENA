@@ -18,7 +18,16 @@ export default class FcmToken extends BaseModel {
   declare device_id: string | null
 
   @column()
+  declare id_institucion: number | null
+
+  @column()
   declare platform: 'android' | 'ios'
+
+  @column.dateTime()
+  declare last_seen: DateTime | null
+  
+  @column()
+  declare app_version: string | null
 
   @column()
   declare is_active: boolean

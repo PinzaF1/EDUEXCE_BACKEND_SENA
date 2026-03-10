@@ -8,8 +8,11 @@ import LogrosService from '../services/logros_service.js'
 import RetosService from '../services/retos_service.js'
 import EstudiantesService from '../services/estudiantes_service.js'
 import SincronizacionService from '../services/sincronizacion_service.js'
+import FcmService from '../services/fcm_service.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import jwt from 'jsonwebtoken'
+import { DateTime } from 'luxon'
 import app from '@adonisjs/core/services/app'
 
 const estudiantesService = new EstudiantesService()
@@ -20,6 +23,7 @@ const rankingService = new RankingService()
 const logrosService = new LogrosService()
 const retosService = new RetosService()
 const sincronizacionService = new SincronizacionService()
+const fcmService = new FcmService()
 
 class MovilController {
   // ================= PERFIL =================
@@ -903,6 +907,84 @@ public async editarMiPerfilContacto({ request, response }: HttpContext) {
       return response.badRequest({ 
         error: e?.message || 'No se pudo subir la foto' 
       })
+    }
+  }
+
+  // ================= FCM TOKEN =================
+  public async registrarFcmToken({ request, response }: HttpContext) {
+    try {
+      const auth = (request as any).authUsuario
+      if (!auth || !auth.id_usuario) return response.unauthorized({ error: 'No autenticado' })
+
+      const body = request.only(['token', 'device_id', 'platform', 'app_version']) as any
+      const token = String(body.token || '').trim()
+      if (!token) return response.badRequest({ error: 'El campo token es obligatorio' })
+
+      const device_id = body.device_id ?? null
+      const platform = body.platform === 'ios' ? 'ios' : 'android'
+      const app_version = body.app_version ?? null
+      const id_usuario = Number(auth.id_usuario)
+      const id_institucion = auth.id_institucion ? Number(auth.id_institucion) : null
+
+      const saved = await fcmService.registrarToken(
+        id_usuario,
+        token,
+        device_id,
+        platform,
+        id_institucion,
+        app_version
+      )
+
+      return response.ok({ success: true, created: !!saved })
+    } catch (e: any) {
+      console.error('Error registrarFcmToken:', e)
+      return response.internalServerError({ error: e?.message || 'Error al registrar token' })
+    }
+  }
+
+  // DELETE /movil/fcm-token -> desactivar token FCM (logout/uninstall)
+  public async eliminarFcmToken({ request, response }: HttpContext) {
+    try {
+      const authHeader = request.header('authorization') || request.header('Authorization')
+      if (!authHeader) return response.unauthorized({ ok: false, message: 'Token requerido' })
+
+      const tokenJwt = String(authHeader).replace(/^Bearer\s+/i, '').trim()
+      let payload: any = null
+      try {
+        const SECRET = process.env.JWT_SECRET || 'secret123'
+        payload = jwt.verify(tokenJwt, SECRET) as any
+        ;(request as any).authUsuario = payload
+      } catch (e) {
+        return response.unauthorized({ ok: false, message: 'Token inválido' })
+      }
+
+      const fcmToken = String(request.qs().token || request.input('token') || '').trim()
+      if (!fcmToken) return response.badRequest({ ok: false, message: 'token required' })
+
+      const isAdmin = payload && (payload.rol === 'administrador' || payload.role === 'admin')
+
+      // Import del modelo dentro del método para evitar ciclos de import
+      const FcmTokenModel = (await import('../../app/models/fcm_token.js')).default
+
+      let query = FcmTokenModel.query().where('fcm_token', fcmToken)
+      if (!isAdmin) {
+        const id_usuario = Number(payload.id_usuario || payload.id || 0)
+        query = query.where('id_usuario', id_usuario)
+      }
+
+      const found = await query.first()
+      if (!found) {
+        return response.ok({ ok: true, message: 'token not found or already removed' })
+      }
+
+      found.is_active = false
+      try { (found as any).last_seen = DateTime.local() } catch {}
+      await found.save()
+
+      return response.ok({ ok: true, message: 'token desactivado' })
+    } catch (e: any) {
+      console.error('Error eliminarFcmToken:', e)
+      return response.internalServerError({ ok: false, message: e?.message || 'Error al desactivar token' })
     }
   }
 

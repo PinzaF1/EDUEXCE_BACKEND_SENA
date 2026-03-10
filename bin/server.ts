@@ -32,6 +32,8 @@ const IMPORTER = (filePath: string) => {
 new Ignitor(APP_ROOT, { importer: IMPORTER })
   .tap((app) => {
     app.booting(async () => {
+      // SQL tracing desactivado en producción: se eliminó el listener temporal
+      // (Se añadió temporalmente para depuración; no es necesario mantenerlo.)
       await import('#start/env')
       // Inicializar Redis si está configurado
       const { initRedis } = await import('#services/redis_service')

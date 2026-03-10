@@ -1,4 +1,5 @@
 // app/services/notificaciones_service.ts
+import { DateTime } from 'luxon'
 import Notificacion from '../models/notificacione.js'
 import Usuario from '../models/usuario.js'
 import Sesion from '../models/sesione.js'
@@ -71,6 +72,7 @@ export default class NotificacionesService {
     opciones: {
       tipo?: string
       leida?: boolean | null
+      incluir_eliminadas?: boolean
       page?: number
       limit?: number
       desde?: string // fecha ISO
@@ -80,6 +82,7 @@ export default class NotificacionesService {
     const {
       tipo,
       leida,
+      incluir_eliminadas = false,
       page = 1,
       limit = 50,
       desde,
@@ -97,6 +100,7 @@ export default class NotificacionesService {
     // Filtros
     if (tipo) baseQuery.andWhere('tipo', tipo)
     if (typeof leida === 'boolean') baseQuery.andWhere('leida', leida)
+    if (!incluir_eliminadas) baseQuery.andWhere('eliminada', false)
     if (desde) baseQuery.andWhere('created_at', '>=', new Date(desde) as any)
     if (hasta) baseQuery.andWhere('created_at', '<=', new Date(hasta) as any)
 
@@ -118,6 +122,7 @@ export default class NotificacionesService {
       detalle: n.payload?.detalle ?? '',
       payload: n.payload ?? null,
       leida: !!n.leida,
+      eliminada: !!n.eliminada,
       createdAt: n.createdAt ?? n.created_at ?? null,
       created_at: n.created_at ?? n.createdAt ?? null, // Alias
     }))
@@ -136,9 +141,186 @@ export default class NotificacionesService {
   }
 
   async marcarLeidas(ids: number[]) {
-    if (!ids?.length) return 0
-    const affected = await Notificacion.query().whereIn('id_notificacion', ids).update({ leida: true })
+    if (!ids || !Array.isArray(ids) || !ids.length) return 0
+    const validIds = ids.map((i: any) => Number(i)).filter((n: number) => Number.isFinite(n) && !Number.isNaN(n)).map((n: number) => Math.trunc(n))
+    if (!validIds.length) return 0
+    const affected = await Notificacion.query().whereIn('id_notificacion', validIds).update({ leida: true })
     return affected
+  }
+
+  /** Eliminar notificación individual (soft delete) */
+  async eliminarUna(id_notificacion: number, id_institucion: number, id_usuario_admin: number) {
+    console.log('[NotificacionesService] eliminarUna called', { id_notificacion, id_institucion, id_usuario_admin })
+    const notificacion = await Notificacion
+      .query()
+      .where('id_notificacion', id_notificacion)
+      .where('id_institucion', id_institucion)
+      .first()
+
+    if (!notificacion) {
+      console.warn('[NotificacionesService] eliminarUna: notificacion no encontrada', { id_notificacion, id_institucion })
+      throw new Error('Notificación no encontrada')
+    }
+
+    // validar que el actor (usuario que elimina) exista en la tabla usuarios
+    let actor: number | null = Number(id_usuario_admin)
+    console.log('[NotificacionesService] eliminarUna: actor raw value', { actor })
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) {
+      actor = null
+      console.log('[NotificacionesService] eliminarUna: actor invalid, set null')
+    } else {
+      const u = await Usuario.query().where('id_usuario', actor).first()
+      if (!u) {
+        actor = null
+        console.log('[NotificacionesService] eliminarUna: actor not found in usuarios, set null')
+      } else {
+        console.log('[NotificacionesService] eliminarUna: actor found', { id_usuario: actor })
+      }
+    }
+
+    await notificacion
+      .merge({
+        eliminada: true,
+        eliminadaEn: DateTime.now(),
+        eliminadaPor: actor,
+      })
+      .save()
+
+    console.log('[NotificacionesService] eliminarUna: notificacion marcado como eliminada', { id_notificacion, eliminadaPor: actor })
+    return { success: true, mensaje: 'Notificación eliminada correctamente' }
+  }
+
+  /** Eliminar múltiples notificaciones (soft delete) */
+  async eliminarMultiples(ids: number[], id_institucion: number, id_usuario_admin: number) {
+    console.log('[NotificacionesService] eliminarMultiples called', { ids, id_institucion, id_usuario_admin })
+    if (!ids || !Array.isArray(ids) || !ids.length) {
+      console.warn('[NotificacionesService] eliminarMultiples: no ids provided')
+      throw new Error('No se proporcionaron IDs')
+    }
+
+    // Sanitizar y validar IDs
+    const validIds = ids.map((i: any) => Number(i)).filter((n: number) => Number.isFinite(n) && !Number.isNaN(n)).map((n: number) => Math.trunc(n))
+    console.log('[NotificacionesService] eliminarMultiples: validIds', { validIds })
+    if (!validIds.length) {
+      console.warn('[NotificacionesService] eliminarMultiples: no valid ids after sanitization')
+      throw new Error('No se encontraron IDs válidos')
+    }
+
+    if (validIds.length > 100) {
+      console.warn('[NotificacionesService] eliminarMultiples: too many ids', { count: validIds.length })
+      throw new Error('Máximo 100 notificaciones por operación')
+    }
+
+    const notificaciones = await Notificacion
+      .query()
+      .whereIn('id_notificacion', validIds)
+      .where('id_institucion', id_institucion)
+
+    const idsEncontrados = notificaciones.map((n: any) => Number(n.id_notificacion))
+    const idsFallidos = validIds.filter(id => !idsEncontrados.includes(id))
+    console.log('[NotificacionesService] eliminarMultiples: idsEncontrados', { idsEncontrados, idsFallidos })
+
+    // validar que el actor exista en la tabla usuarios; si no existe, usar null
+    let actor: number | null = Number(id_usuario_admin)
+    console.log('[NotificacionesService] eliminarMultiples: actor raw value', { actor })
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) {
+      actor = null
+      console.log('[NotificacionesService] eliminarMultiples: actor invalid, set null')
+    } else {
+      const u = await Usuario.query().where('id_usuario', actor).first()
+      if (!u) {
+        actor = null
+        console.log('[NotificacionesService] eliminarMultiples: actor not found in usuarios, set null')
+      } else {
+        console.log('[NotificacionesService] eliminarMultiples: actor found', { id_usuario: actor })
+      }
+    }
+
+    const affected = await Notificacion
+      .query()
+      .whereIn('id_notificacion', idsEncontrados)
+      .update({
+        eliminada: true,
+        eliminadaEn: DateTime.now(),
+        eliminadaPor: actor,
+      })
+    console.log('[NotificacionesService] eliminarMultiples: update affected', { affected, actor })
+
+    if (idsFallidos.length > 0) {
+      return {
+        success: true,
+        eliminadas: affected,
+        fallidas: idsFallidos.length,
+        mensaje: `${affected} de ${validIds.length} notificaciones eliminadas`,
+        errores: idsFallidos.map(id => ({ id, error: 'Notificación no encontrada' })),
+      }
+    }
+
+    return {
+      success: true,
+      eliminadas: affected,
+      mensaje: `${affected} notificaciones eliminadas correctamente`,
+    }
+  }
+
+  /** Eliminar todas las notificaciones con filtros opcionales */
+  async eliminarTodas(
+    id_institucion: number,
+    id_usuario_admin: number,
+    filtros: {
+      leidas_solamente?: boolean
+      tipo?: string
+      antes_de?: string
+    } = {}
+  ) {
+    const query = Notificacion
+      .query()
+      .where('id_institucion', id_institucion)
+      .where('eliminada', false)
+
+    if (filtros.leidas_solamente) {
+      query.where('leida', true)
+    }
+
+    if (filtros.tipo) {
+      query.where('tipo', filtros.tipo)
+    }
+
+    if (filtros.antes_de) {
+      query.where('created_at', '<', new Date(filtros.antes_de) as any)
+    }
+
+    // Límite de seguridad: máximo 1000 por operación
+    query.limit(1000)
+
+    console.log('[NotificacionesService] eliminarTodas called', { id_institucion, id_usuario_admin, filtros })
+    // validar que el actor exista en la tabla usuarios; si no existe, usar null
+    let actor: number | null = Number(id_usuario_admin)
+    console.log('[NotificacionesService] eliminarTodas: actor raw value', { actor })
+    if (!Number.isFinite(actor) || Number.isNaN(actor)) {
+      actor = null
+      console.log('[NotificacionesService] eliminarTodas: actor invalid, set null')
+    } else {
+      const u = await Usuario.query().where('id_usuario', actor).first()
+      if (!u) {
+        actor = null
+        console.log('[NotificacionesService] eliminarTodas: actor not found in usuarios, set null')
+      } else {
+        console.log('[NotificacionesService] eliminarTodas: actor found', { id_usuario: actor })
+      }
+    }
+
+    const affected = await query.update({
+      eliminada: true,
+      eliminadaEn: DateTime.now(),
+      eliminadaPor: actor,
+    })
+
+    return {
+      success: true,
+      eliminadas: affected,
+      mensaje: `${affected} notificaciones eliminadas correctamente`,
+    }
   }
 
   /** Orquestador: genera TODOS los tipos para el mes actual */

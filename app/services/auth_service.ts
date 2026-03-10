@@ -20,7 +20,11 @@ export default class AuthService {
     if (!ok) return null
 
     const token = jwt.sign(
-      { rol: 'administrador', id_institucion: (inst as any).id_institucion },
+      { 
+        rol: 'administrador', 
+        id_institucion: (inst as any).id_institucion,
+        id_usuario: (inst as any).id_institucion  // Usar id_institucion como id_usuario para admins
+      },
       SECRET,
       { expiresIn: EXPIRES_IN }
     )

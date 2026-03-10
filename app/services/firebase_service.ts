@@ -13,19 +13,24 @@ class FirebaseService {
   public static initialize() {
     if (!this.initialized) {
       try {
+        console.log('🔥 [FIREBASE] Iniciando configuración...')
         let serviceAccount: admin.ServiceAccount
 
         // MÉTODO 1: Leer desde variable de entorno (para Docker/Producción)
         const firebaseEnv = process.env.FIREBASE_SERVICE_ACCOUNT || env.get('FIREBASE_SERVICE_ACCOUNT', '')
 
         if (firebaseEnv) {
-          console.log('🔧 Cargando Firebase desde variable de entorno...')
+          console.log('🔧 [FIREBASE] Cargando desde variable de entorno...')
           serviceAccount = JSON.parse(firebaseEnv) as admin.ServiceAccount
+          console.log(`🔧 [FIREBASE] Project ID: ${serviceAccount.project_id}`)
         } else {
           // MÉTODO 2: Leer desde archivo local (para desarrollo)
           const serviceAccountPath = join(__dirname, '..', '..', 'config', 'firebase-admin-sdk.json')
           
+          console.log(`🔍 [FIREBASE] Verificando archivo: ${serviceAccountPath}`)
+          
           if (!existsSync(serviceAccountPath)) {
+            console.error(`❌ [FIREBASE] Archivo no encontrado: ${serviceAccountPath}`)
             throw new Error(
               'No se encontró configuración de Firebase.\n' +
               'Opciones:\n' +
@@ -34,8 +39,9 @@ class FirebaseService {
             )
           }
 
-          console.log('🔧 Cargando Firebase desde archivo config/firebase-admin-sdk.json...')
+          console.log('🔧 [FIREBASE] Cargando desde archivo config/firebase-admin-sdk.json...')
           serviceAccount = JSON.parse(readFileSync(serviceAccountPath, 'utf-8')) as admin.ServiceAccount
+          console.log(`🔧 [FIREBASE] Project ID: ${serviceAccount.project_id}`)
         }
 
         admin.initializeApp({
@@ -43,11 +49,13 @@ class FirebaseService {
         })
 
         this.initialized = true
-        console.log('✅ Firebase Admin SDK inicializado correctamente')
+        console.log('✅ [FIREBASE] Admin SDK inicializado correctamente')
       } catch (error) {
-        console.error('❌ Error al inicializar Firebase Admin SDK:', error)
+        console.error('❌ [FIREBASE] Error al inicializar:', error)
         throw error
       }
+    } else {
+      console.log('🔥 [FIREBASE] Ya está inicializado')
     }
   }
 

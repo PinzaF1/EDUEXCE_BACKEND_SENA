@@ -5,6 +5,7 @@ import SesionDetalle from '../models/sesiones_detalle.js'
 import IaService from './ia_service.js'
 import BancoPregunta from '../models/banco_pregunta.js'
 import Usuario from '../models/usuario.js'
+import FcmService from './fcm_service.js'
 import { DateTime } from 'luxon'
 
 type Area = 'Matematicas' | 'Lenguaje' | 'Ciencias' | 'Sociales' | 'Ingles'
@@ -330,6 +331,44 @@ async aceptarReto(id_reto: number, id_usuario_invitado: number) {
     preguntas = (pack || []).map(mapPreguntaForClient)
     ;(reto as any).reglas_json = { limite_seg: null, preguntas }
     await reto.save()
+  }
+  
+  // Envío de notificación al oponente (no bloquear respuesta)
+  try {
+    const fcm = new FcmService()
+    const creadorUser = await Usuario.find(d.creado_por)
+    const fromName = creadorUser ? `${(creadorUser as any).nombre || ''} ${(creadorUser as any).apellido || ''}`.trim() : 'Alguien'
+    const title = '¡Nuevo Reto!'
+    const body = `Te han retado en ${area}`
+    
+    // Payload con formato requerido por Android (campos obligatorios según especificación móvil)
+    const dataPayload: Record<string,string> = {
+      tipo: 'reto_recibido',
+      retador_nombre: fromName,
+      area: String(area),
+      reto_id: String((reto as any).id_reto),
+      retador_id: String(d.creado_por),
+      // Campos adicionales para retrocompatibilidad y funcionalidad extra
+      challengeId: String((reto as any).id_reto), // Mantener por retrocompatibilidad
+      fromUserId: String(d.creado_por), // Mantener por retrocompatibilidad
+      institutionId: String(d.id_institucion),
+      deep_link: `eduexce://retos/${(reto as any).id_reto}`,
+    }
+    
+    // LOGS EXHAUSTIVOS para debug móvil
+    console.log(`🎮 [RETOS FCM] Enviando notificación de reto:`)
+    console.log(`   👤 De: ${fromName} (ID: ${d.creado_por})`)
+    console.log(`   👤 Para: Usuario ID ${oponente}`)
+    console.log(`   📚 Área: ${area}`)
+    console.log(`   🆔 Reto ID: ${(reto as any).id_reto}`)
+    console.log(`   📦 Payload completo:`, { title, body, data: dataPayload })
+    
+    // Enviar notificación y esperar resultado para logs
+    const resultado = await fcm.enviarNotificacionPorUsuario(oponente, title, body, dataPayload)
+    console.log(`   ✅ Resultado FCM:`, resultado)
+    
+  } catch (e) {
+    console.error('❌ [RETOS FCM] Error enviando notificación:', e)
   }
 
   // 2) Participantes: UNIÓN (existentes + creador + quien acepta)
