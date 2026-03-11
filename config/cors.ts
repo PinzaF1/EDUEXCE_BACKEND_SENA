@@ -28,6 +28,9 @@ const corsConfig = defineConfig({
       'https://eduexcelsena-omega.vercel.app',
       'https://eduexce-aws-demo.vercel.app',
       'https://eduexce-aws-demo-mifdrnyub-yare-cntrls-projects.vercel.app',
+      'https://edu-pilot-bxo0nl9el-yare-cntrls-projects.vercel.app',
+      'https://edu-pilot-b970o3wdw-yare-cntrls-projects.vercel.app',
+      'https://edu-pilot-smoky.vercel.app',
     ]
 
     // ✅ IPs de EC2 (si las necesitas)
@@ -67,6 +70,15 @@ const corsConfig = defineConfig({
     'Origin',
     'Access-Control-Request-Method',
     'Access-Control-Request-Headers',
+    'User-Agent',
+    'Cache-Control',
+    'Pragma',
+    'Sec-Fetch-Mode',
+    'Sec-Fetch-Site',
+    'Sec-Fetch-Dest',
+    'Referer',
+    'Accept-Language',
+    'Accept-Encoding',
   ],
   
   exposeHeaders: ['authorization', 'content-range', 'x-total-count'],
