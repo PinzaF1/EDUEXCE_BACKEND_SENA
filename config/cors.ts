@@ -22,8 +22,9 @@ const corsConfig = defineConfig({
       'https://churnable-nimbly-norbert.ngrok-free.dev',
     ]
 
-    // ✅ URLs de Vercel (todas juntas aquí)
+    // ✅ URLs de Vercel (todas juntas aquí + wildcard)
     const vercelOrigins = [
+      'https://eduplex.vercel.app',
       'https://senaeduexcel.vercel.app',
       'https://eduexcelsena-omega.vercel.app',
       'https://eduexce-aws-demo.vercel.app',
@@ -49,6 +50,10 @@ const corsConfig = defineConfig({
 
     // Sin origin (Postman, etc) - permitir en dev
     if (!origin && env.get('NODE_ENV') === 'development') return true
+
+    // ✅ WILDCARD para cualquier dominio de Vercel
+    if (origin?.match(/^https:\/\/[a-zA-Z0-9\-]+\.vercel\.app$/)) return true
+    if (origin?.match(/^https:\/\/[a-zA-Z0-9\-]+-[a-zA-Z0-9\-]+-[a-zA-Z0-9\-]+\.vercel\.app$/)) return true
 
     // Verificar lista permitida
     if (allowedOrigins.includes(origin)) return true
